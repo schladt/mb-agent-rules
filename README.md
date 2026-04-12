@@ -86,6 +86,42 @@ This is the tool-instruction setup. It is separate from template setup.
 
 After bootstrapping exactly one project memory-bank profile, you may configure Cursor, GitHub Copilot, Codex, or all three. When configuring multiple environments in the same project, always use the matching profile instructions for the memory-bank profile you chose.
 
+### Automated All-Environment Setup
+
+Use `bin/init-agent-rules` when you want to bootstrap the selected project memory-bank profile and configure Cursor, GitHub Copilot, and Codex in one step.
+
+Install it somewhere on your `PATH`:
+
+```bash
+mkdir -p ~/.local/bin
+install -m 0755 "$HOME/projects/agent-rules/bin/init-agent-rules" ~/.local/bin/init-agent-rules
+```
+
+Run it from the target project root:
+
+```bash
+init-agent-rules general-project
+```
+
+Supported project type arguments:
+
+- `pentest`
+- `academic-research`
+- `general-project`
+
+Useful options:
+
+- `--dry-run`: print the files that would be created or skipped.
+- `--force`: overwrite existing profile-managed files.
+
+The script defaults to `$HOME/projects/agent-rules`. If this repository lives somewhere else, edit `DEFAULT_AGENT_RULES_ROOT` at the top of the script or override it at runtime:
+
+```bash
+AGENT_RULES_ROOT=/path/to/agent-rules init-agent-rules general-project
+```
+
+The script does not remove other profile instruction files. If it finds profile files that may conflict, it prints a warning so you can remove them intentionally.
+
 ### Cursor
 
 Use one project-scoped Cursor rule:
@@ -204,8 +240,9 @@ When switching between Cursor, Copilot, and Codex, start the next tool by tellin
 
 ## Repository Layout
 
-Templates:
+Command and templates:
 
+- `bin/init-agent-rules`
 - `templates/pentest-memory-bank/`
 - `templates/academic-research-memory-bank/`
 - `templates/general-project-memory-bank/`

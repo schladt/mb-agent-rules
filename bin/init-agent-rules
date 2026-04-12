@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_AGENT_RULES_ROOT="$HOME/projects/agent-rules"
+AGENT_RULES_ROOT="${AGENT_RULES_ROOT:-$DEFAULT_AGENT_RULES_ROOT}"
+FORCE=0
+DRY_RUN=0
+PROJECT_TYPE=""
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  init-agent-rules <project-type> [--force] [--dry-run]
+
+Project types:
+  pentest
+  academic-research
+  general-project
+
+Aliases:
+  pentest: hardware-pentest, software-pentest
+  academic-research: academic, research
+  general-project: general, project
+
+Run this command from the root of the target project. It initializes:
+  memory-bank/ from the selected project type template
+  .cursor/rules/<profile>-memory-bank.mdc
+  .github/copilot-instructions.md
+  .github/instructions/<profile>-memory.instructions.md
+  AGENTS.md
+
+By default, existing files are not overwritten. Use --force to overwrite
+profile-managed files. Set AGENT_RULES_ROOT to override:
+  AGENT_RULES_ROOT=/path/to/agent-rules init-agent-rules general-project
+USAGE
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+log() {
+  printf '%s\n' "$*"
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --force)
+      FORCE=1
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -*)
+      die "unknown option: $1"
+      ;;
+    *)
+      if [ -n "$PROJECT_TYPE" ]; then
+        die "expected one project type, got extra argument: $1"
+      fi
+      PROJECT_TYPE="$1"
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$PROJECT_TYPE" ]; then
+  usage >&2
+  exit 2
+fi
+
+case "$PROJECT_TYPE" in
+  pentest|hardware-pentest|software-pentest)
+    PROFILE="pentest"
+    TEMPLATE_DIR_NAME="pentest-memory-bank"
+    CURSOR_RULE_NAME="pentest-memory-bank.mdc"
+    COPILOT_PROFILE_NAME="pentest-memory.instructions.md"
+    CODEX_PROFILE_NAME="AGENTS.pentest.md"
+    ;;
+  academic-research|academic|research)
+    PROFILE="academic-research"
+    TEMPLATE_DIR_NAME="academic-research-memory-bank"
+    CURSOR_RULE_NAME="academic-research-memory-bank.mdc"
+    COPILOT_PROFILE_NAME="academic-research-memory.instructions.md"
+    CODEX_PROFILE_NAME="AGENTS.academic-research.md"
+    ;;
+  general-project|general|project)
+    PROFILE="general-project"
+    TEMPLATE_DIR_NAME="general-project-memory-bank"
+    CURSOR_RULE_NAME="general-project-memory-bank.mdc"
+    COPILOT_PROFILE_NAME="general-project-memory.instructions.md"
+    CODEX_PROFILE_NAME="AGENTS.general-project.md"
+    ;;
+  *)
+    die "unknown project type: $PROJECT_TYPE"
+    ;;
+esac
+
+TARGET_ROOT="$(pwd -P)"
+TEMPLATE_DIR="$AGENT_RULES_ROOT/templates/$TEMPLATE_DIR_NAME"
+CURSOR_RULE_SRC="$AGENT_RULES_ROOT/cursor/$CURSOR_RULE_NAME"
+COPILOT_BASE_SRC="$AGENT_RULES_ROOT/github-copilot/.github/copilot-instructions.md"
+COPILOT_PROFILE_SRC="$AGENT_RULES_ROOT/github-copilot/.github/instructions/$COPILOT_PROFILE_NAME"
+CODEX_PROFILE_SRC="$AGENT_RULES_ROOT/codex/$CODEX_PROFILE_NAME"
+
+for required in "$TEMPLATE_DIR" "$CURSOR_RULE_SRC" "$COPILOT_BASE_SRC" "$COPILOT_PROFILE_SRC" "$CODEX_PROFILE_SRC"; do
+  [ -e "$required" ] || die "required source not found: $required"
+done
+
+run_mkdir() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "mkdir -p $1"
+  else
+    mkdir -p "$1"
+  fi
+}
+
+copy_file() {
+  src="$1"
+  dest="$2"
+
+  run_mkdir "$(dirname "$dest")"
+
+  if [ -e "$dest" ] && [ "$FORCE" -ne 1 ]; then
+    log "skip existing: ${dest#$TARGET_ROOT/}"
+    return 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if [ -e "$dest" ]; then
+      log "overwrite: ${dest#$TARGET_ROOT/} <- $src"
+    else
+      log "copy: ${dest#$TARGET_ROOT/} <- $src"
+    fi
+  else
+    cp "$src" "$dest"
+    if [ -e "$dest" ] && [ "$FORCE" -eq 1 ]; then
+      log "wrote: ${dest#$TARGET_ROOT/}"
+    else
+      log "created: ${dest#$TARGET_ROOT/}"
+    fi
+  fi
+}
+
+copy_template_dir() {
+  template_dir="$1"
+  dest_dir="$2"
+
+  run_mkdir "$dest_dir"
+
+  while IFS= read -r -d '' src; do
+    rel="${src#$template_dir/}"
+    copy_file "$src" "$dest_dir/$rel"
+  done < <(find "$template_dir" -type f -print0 | sort -z)
+}
+
+warn_conflicting_profiles() {
+  expected_cursor=".cursor/rules/$CURSOR_RULE_NAME"
+  expected_copilot=".github/instructions/$COPILOT_PROFILE_NAME"
+
+  for candidate in \
+    ".cursor/rules/pentest-memory-bank.mdc" \
+    ".cursor/rules/academic-research-memory-bank.mdc" \
+    ".cursor/rules/general-project-memory-bank.mdc"; do
+    if [ "$candidate" != "$expected_cursor" ] && [ -e "$TARGET_ROOT/$candidate" ]; then
+      log "warning: existing Cursor profile rule may conflict: $candidate"
+    fi
+  done
+
+  for candidate in \
+    ".github/instructions/pentest-memory.instructions.md" \
+    ".github/instructions/academic-research-memory.instructions.md" \
+    ".github/instructions/general-project-memory.instructions.md"; do
+    if [ "$candidate" != "$expected_copilot" ] && [ -e "$TARGET_ROOT/$candidate" ]; then
+      log "warning: existing Copilot profile instruction may conflict: $candidate"
+    fi
+  done
+}
+
+log "Initializing agent rules in: $TARGET_ROOT"
+log "Project type: $PROFILE"
+log "Agent rules root: $AGENT_RULES_ROOT"
+
+copy_template_dir "$TEMPLATE_DIR" "$TARGET_ROOT/memory-bank"
+copy_file "$CURSOR_RULE_SRC" "$TARGET_ROOT/.cursor/rules/$CURSOR_RULE_NAME"
+copy_file "$COPILOT_BASE_SRC" "$TARGET_ROOT/.github/copilot-instructions.md"
+copy_file "$COPILOT_PROFILE_SRC" "$TARGET_ROOT/.github/instructions/$COPILOT_PROFILE_NAME"
+copy_file "$CODEX_PROFILE_SRC" "$TARGET_ROOT/AGENTS.md"
+warn_conflicting_profiles
+
+log "Done. Cursor, GitHub Copilot, and Codex are configured to share memory-bank/."
