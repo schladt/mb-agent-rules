@@ -14,6 +14,41 @@ The core model is:
 
 Do not create separate memory banks for Cursor, Copilot, and Codex. They should all read and update the same project-local `PROJECT_ROOT/memory-bank/` files.
 
+## Quick Start
+
+Install the helper command:
+
+```bash
+mkdir -p ~/.local/bin
+install -m 0755 "$HOME/projects/agent-rules/bin/init-agent-rules" ~/.local/bin/init-agent-rules
+```
+
+From the target project root, initialize one profile and all three agentic environments:
+
+```bash
+init-agent-rules general-project
+```
+
+Use one of these project type arguments:
+
+- `pentest`
+- `academic-research`
+- `general-project`
+
+Preview before writing files:
+
+```bash
+init-agent-rules general-project --dry-run
+```
+
+If this repository is not at `$HOME/projects/agent-rules`, either edit `DEFAULT_AGENT_RULES_ROOT` at the top of `bin/init-agent-rules` or run with:
+
+```bash
+AGENT_RULES_ROOT=/path/to/agent-rules init-agent-rules general-project
+```
+
+The helper configures `memory-bank/`, Cursor, GitHub Copilot, and Codex. For manual setup or single-agent setup, use the detailed sections below.
+
 ## Supported Profiles
 
 - Pentest: hardware/software pentest engagement memory with scope, targets, findings, and evidence.
