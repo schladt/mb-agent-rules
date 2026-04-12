@@ -1,0 +1,50 @@
+# Pentest Memory Bank Instructions (Codex)
+
+Use a project-local memory bank for all hardware/software pentest work.
+
+## Required Workflow
+
+1. Before each task:
+- Resolve `PROJECT_ROOT` as the current git repo root. If no git root exists, use current working directory.
+- Ensure `PROJECT_ROOT/memory-bank` exists.
+- Ensure these files exist (create if missing):
+  - `memory-bank/projectBrief.md`
+  - `memory-bank/scopeAuthorization.md`
+  - `memory-bank/targets.md`
+  - `memory-bank/activeContext.md`
+  - `memory-bank/findings.md`
+  - `memory-bank/progress.md`
+  - `memory-bank/evidenceIndex.md`
+- Read all required memory files before planning or execution.
+
+2. During each task:
+- Treat `scopeAuthorization.md` as authority for allowed targets and methods.
+- If scope or authorization is unclear, stop and ask before intrusive or offensive actions.
+- Record short-term work state in `activeContext.md`.
+- Record completed and pending work in `progress.md`.
+- Record validated findings in `findings.md`.
+- Record evidence artifacts in `evidenceIndex.md` with relative paths and timestamps.
+
+3. After each task (before final response):
+- Update `activeContext.md`.
+- Update `progress.md`.
+- Update `findings.md` (write `No new validated findings` if none).
+- Update `evidenceIndex.md` (write `No new evidence artifacts` if none).
+- Update `targets.md`, `projectBrief.md`, or `scopeAuthorization.md` if understanding changed.
+
+## Safety and Data Handling
+
+- Do not store plaintext secrets, private keys, exploit payloads, or PII in memory files.
+- Store references to secure storage locations instead.
+
+## Update Style
+
+- Markdown only.
+- Use concise entries with timestamps and status labels: `Planned`, `In Progress`, `Done`, `Blocked`.
+- Never delete historical notes. Append and mark superseded content.
+
+## Response Contract
+
+Every final task response must include:
+- `Memory bank: consulted and updated`
+- If skipped, explain exactly why.

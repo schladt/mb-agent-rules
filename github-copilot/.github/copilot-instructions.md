@@ -1,28 +1,31 @@
 # GitHub Copilot Project Instructions
 
-Follow the pentest memory-bank workflow for every task.
+Use exactly one project-local memory-bank profile for this repository.
 
-## Required behavior
+## Profile Selection
+
+Choose the matching profile-specific instruction file from `.github/instructions/`:
+
+- Pentest: `pentest-memory.instructions.md`
+- Academic research: `academic-research-memory.instructions.md`
+- General project: `general-project-memory.instructions.md`
+
+If multiple profile instruction files are present and their required memory files conflict, ask which profile should govern the work before proceeding.
+
+## Universal Required Behavior
 
 - Use project-local memory in `memory-bank/`.
-- Before planning or coding, read required memory files.
-- If memory files are missing, create them using the project templates.
-- Treat `memory-bank/scopeAuthorization.md` as the scope/authorization source of truth.
-- If scope or authorization is unclear, stop and ask before intrusive/offensive actions.
-- Keep sensitive data out of memory files (no plaintext secrets, private keys, exploit payloads, or PII).
-- Before finalizing each task, update memory files and explicitly note whether new findings/evidence were added.
+- Before planning or coding, read the required memory files for the active profile.
+- If memory files are missing, create them using the active profile templates.
+- Treat the active profile's authority files as the source of truth:
+  - Pentest: `scopeAuthorization.md`, `targets.md`, `projectBrief.md`
+  - Academic research: `researchBrief.md`, `researchQuestions.md`, `methodology.md`
+  - General project: `projectBrief.md`, `requirements.md`
+- If scope, authorization, ethics, requirements, ownership, or data permissions are unclear, stop and ask before high-impact or irreversible actions.
+- Keep sensitive data out of memory files. Do not store plaintext secrets, private keys, credentials, exploit payloads, PII, sensitive participant data, or restricted datasets.
+- Before finalizing each task, update the active profile's required memory files.
 
-## Required files in `memory-bank/`
-
-- `projectBrief.md`
-- `scopeAuthorization.md`
-- `targets.md`
-- `activeContext.md`
-- `findings.md`
-- `progress.md`
-- `evidenceIndex.md`
-
-## Response footer
+## Response Footer
 
 Include this line in final responses:
 - `Memory bank: consulted and updated`

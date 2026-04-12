@@ -1,0 +1,125 @@
+# Cursor Rule: Local General Project Memory Bank (Global User Rule)
+
+Paste the `BEGIN RULE` to `END RULE` block into Cursor `Settings -> Rules` as a User Rule.
+
+## BEGIN RULE
+
+Use a project-local memory bank for every general project task.
+
+Non-negotiable workflow:
+1. Before each task: read memory bank.
+2. During each task: keep requirements, decisions, risks, and handoff context synchronized.
+3. After each task: update memory bank before final response.
+
+### 1) Bootstrap and Load (required at task start)
+
+- Resolve `PROJECT_ROOT` as the current repo root (`.git` directory). If no git repo is found, use current working directory.
+- Use `MEMORY_DIR = PROJECT_ROOT/memory-bank`.
+- If `MEMORY_DIR` does not exist, create it.
+- Ensure these files exist (create if missing):
+  - `memory-bank/projectBrief.md`
+  - `memory-bank/requirements.md`
+  - `memory-bank/decisions.md`
+  - `memory-bank/activeContext.md`
+  - `memory-bank/progress.md`
+  - `memory-bank/risks.md`
+  - `memory-bank/handoff.md`
+- If a required file is newly created, initialize it with the templates in this rule.
+- Read all required memory files before planning or executing any task.
+
+### 2) Project Gates
+
+- Treat `projectBrief.md` and `requirements.md` as source of truth for goals, constraints, non-goals, and acceptance criteria.
+- If requirements, ownership, privacy, or production-impacting behavior are unclear, stop and ask before irreversible or high-impact actions.
+- Keep plaintext secrets, credentials, private keys, and sensitive customer/user data out of memory files. Store references to secure locations instead.
+
+### 3) General Project Recording Rules (during task)
+
+- Track current objective, approach, blockers, and next steps in `activeContext.md`.
+- Track completed and pending work in `progress.md`.
+- Track durable tradeoffs and decisions in `decisions.md`.
+- Track meaningful risks, impacts, owners, and mitigations in `risks.md`.
+- Keep `handoff.md` current enough that another contributor can resume the work.
+
+### 4) Completion Updates (required before final answer)
+
+Update at least these files after completing each task:
+- `activeContext.md`
+- `progress.md`
+- `handoff.md`
+- `decisions.md` (if no new decision, explicitly state "No new decisions")
+- `risks.md` (if no new risk, explicitly state "No new risks")
+
+Also update `projectBrief.md` or `requirements.md` when durable project understanding changes.
+
+### 5) Update Style
+
+- Markdown only.
+- Use concise sections, timestamps, and clear status labels (`Planned`, `In Progress`, `Done`, `Blocked`).
+- Never delete historical notes; append updates and mark outdated items as superseded.
+- Keep entries actionable and linked to requirements or decisions when relevant.
+
+### 6) Required File Templates (for missing files)
+
+When creating required files, use these minimum templates.
+
+`projectBrief.md`
+- Project name
+- Objective
+- Users / stakeholders
+- Success criteria
+- Non-goals
+- Constraints
+
+`requirements.md`
+- Functional requirements
+- Non-functional requirements
+- Acceptance criteria
+- Dependencies
+- Assumptions
+- Out of scope
+
+`decisions.md`
+- Date
+- Decision
+- Context
+- Options considered
+- Rationale
+- Consequences
+- Status (`Proposed` / `Accepted` / `Superseded`)
+
+`activeContext.md`
+- Current objective
+- Current approach
+- Immediate next steps (1-3)
+- Blockers / questions
+
+`progress.md`
+- Session/date
+- Completed
+- In progress
+- Pending
+- Verification/tests run
+
+`risks.md`
+- Risk
+- Impact
+- Likelihood
+- Mitigation
+- Owner
+- Status (`Open` / `Monitoring` / `Mitigated` / `Accepted`)
+
+`handoff.md`
+- Current state
+- Important context
+- Known issues
+- Next recommended work
+- Files / areas to review
+
+### 7) Response Contract
+
+In final task responses, include a short line:
+- `Memory bank: consulted and updated`
+- If skipped, explain exactly why.
+
+## END RULE
