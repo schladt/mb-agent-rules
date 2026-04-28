@@ -5,6 +5,7 @@ Rule and template files for local memory-bank workflows across:
 - Cursor
 - GitHub Copilot (VS Code)
 - Codex (VS Code)
+- Claude Code (VS Code)
 
 The core model is:
 
@@ -12,7 +13,7 @@ The core model is:
 2. Bootstrap one shared `memory-bank/` directory in the target project.
 3. Configure any or all supported agentic environments to use that same directory.
 
-Do not create separate memory banks for Cursor, Copilot, and Codex. They should all read and update the same project-local `PROJECT_ROOT/memory-bank/` files.
+Do not create separate memory banks for Cursor, Copilot, Codex, and Claude Code. They should all read and update the same project-local `PROJECT_ROOT/memory-bank/` files.
 
 ## Quick Start
 
@@ -23,7 +24,7 @@ mkdir -p ~/.local/bin
 install -m 0755 "$HOME/projects/agent-rules/bin/init-agent-rules" ~/.local/bin/init-agent-rules
 ```
 
-From the target project root, initialize one profile and all three agentic environments:
+From the target project root, initialize one profile and all supported agentic environments:
 
 ```bash
 init-agent-rules general-project
@@ -47,7 +48,7 @@ If this repository is not at `$HOME/projects/agent-rules`, either edit `DEFAULT_
 AGENT_RULES_ROOT=/path/to/agent-rules init-agent-rules general-project
 ```
 
-The helper configures `memory-bank/`, Cursor, GitHub Copilot, and Codex. For manual setup or single-agent setup, use the detailed sections below.
+The helper configures `memory-bank/`, Cursor, GitHub Copilot, Codex, and Claude Code. For manual setup or single-agent setup, use the detailed sections below.
 
 ## Supported Profiles
 
@@ -119,11 +120,11 @@ General project memory bank:
 
 This is the tool-instruction setup. It is separate from template setup.
 
-After bootstrapping exactly one project memory-bank profile, you may configure Cursor, GitHub Copilot, Codex, or all three. When configuring multiple environments in the same project, always use the matching profile instructions for the memory-bank profile you chose.
+After bootstrapping exactly one project memory-bank profile, you may configure Cursor, GitHub Copilot, Codex, Claude Code, or all of them. When configuring multiple environments in the same project, always use the matching profile instructions for the memory-bank profile you chose.
 
 ### Automated All-Environment Setup
 
-Use `bin/init-agent-rules` when you want to bootstrap the selected project memory-bank profile and configure Cursor, GitHub Copilot, and Codex in one step.
+Use `bin/init-agent-rules` when you want to bootstrap the selected project memory-bank profile and configure Cursor, GitHub Copilot, Codex, and Claude Code in one step.
 
 Install it somewhere on your `PATH`:
 
@@ -216,11 +217,30 @@ Recommended:
 - Keep baseline personal defaults in `~/.codex/AGENTS.md`.
 - Keep project-specific memory-bank behavior in the target repo `AGENTS.md`.
 
-## Using All Three Environments Together
+### Claude Code
+
+Claude Code project instructions live in `CLAUDE.md`. The Claude Code VS Code extension and CLI both use Claude Code's shared configuration and project-instruction behavior.
+
+```bash
+cp /path/to/agent-rules/claude-code/CLAUDE.pentest.md /path/to/your-project/CLAUDE.md
+```
+
+Swap the source file for another profile when needed:
+
+- Academic research: `claude-code/CLAUDE.academic-research.md`
+- General project: `claude-code/CLAUDE.general-project.md`
+
+Recommended:
+
+- Keep project-specific memory-bank behavior in the target repo `CLAUDE.md`.
+- Keep personal Claude Code preferences in `~/.claude/CLAUDE.md` or `CLAUDE.local.md`, not in the shared project profile.
+- Treat this repository's `memory-bank/` as shared project memory; Claude Code auto memory is separate and machine-local.
+
+## Using Multiple Environments Together
 
 This is supported. Bootstrap the memory bank once, then install the matching rule/instruction files for each agentic environment.
 
-Example general project layout after configuring all three:
+Example general project layout after configuring all supported environments:
 
 ```text
 your-project/
@@ -240,9 +260,10 @@ your-project/
     instructions/
       general-project-memory.instructions.md
   AGENTS.md
+  CLAUDE.md
 ```
 
-Example setup for a general project using all three environments:
+Example setup for a general project using all supported environments:
 
 ```bash
 mkdir -p /path/to/your-project/memory-bank
@@ -256,6 +277,7 @@ cp /path/to/agent-rules/github-copilot/.github/copilot-instructions.md /path/to/
 cp /path/to/agent-rules/github-copilot/.github/instructions/general-project-memory.instructions.md /path/to/your-project/.github/instructions/general-project-memory.instructions.md
 
 cp /path/to/agent-rules/codex/AGENTS.general-project.md /path/to/your-project/AGENTS.md
+cp /path/to/agent-rules/claude-code/CLAUDE.general-project.md /path/to/your-project/CLAUDE.md
 ```
 
 ## Operating Model
@@ -271,7 +293,7 @@ Every profile follows the same lifecycle:
 
 - `Memory bank: consulted and updated`
 
-When switching between Cursor, Copilot, and Codex, start the next tool by telling it to read `memory-bank/*` first and continue from the current active context.
+When switching between Cursor, Copilot, Codex, and Claude Code, start the next tool by telling it to read `memory-bank/*` first and continue from the current active context.
 
 ## Repository Layout
 
@@ -306,11 +328,17 @@ Codex instructions:
 - `codex/AGENTS.academic-research.md`
 - `codex/AGENTS.general-project.md`
 
+Claude Code instructions:
+
+- `claude-code/CLAUDE.pentest.md`
+- `claude-code/CLAUDE.academic-research.md`
+- `claude-code/CLAUDE.general-project.md`
+
 ## Why This Structure
 
 - The lifecycle is shared, but the memory schema matches the project type.
 - Pentest projects need scope, targets, findings, and evidence.
 - Academic research projects need research questions, methodology, source tracking, and literature notes.
 - General projects need requirements, decisions, risks, and handoff context.
-- Cursor `.mdc`, Copilot `.github/*`, and Codex `AGENTS.md` map cleanly to each platform's native instruction system.
+- Cursor `.mdc`, Copilot `.github/*`, Codex `AGENTS.md`, and Claude Code `CLAUDE.md` map cleanly to each platform's native instruction system.
 - Memory remains local to each project and version-controllable.

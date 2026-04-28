@@ -28,6 +28,7 @@ Run this command from the root of the target project. It initializes:
   .github/copilot-instructions.md
   .github/instructions/<profile>-memory.instructions.md
   AGENTS.md
+  CLAUDE.md
 
 By default, existing files are not overwritten. Use --force to overwrite
 profile-managed files. Set AGENT_RULES_ROOT to override:
@@ -83,6 +84,7 @@ case "$PROJECT_TYPE" in
     CURSOR_RULE_NAME="pentest-memory-bank.mdc"
     COPILOT_PROFILE_NAME="pentest-memory.instructions.md"
     CODEX_PROFILE_NAME="AGENTS.pentest.md"
+    CLAUDE_PROFILE_NAME="CLAUDE.pentest.md"
     ;;
   academic-research|academic|research)
     PROFILE="academic-research"
@@ -90,6 +92,7 @@ case "$PROJECT_TYPE" in
     CURSOR_RULE_NAME="academic-research-memory-bank.mdc"
     COPILOT_PROFILE_NAME="academic-research-memory.instructions.md"
     CODEX_PROFILE_NAME="AGENTS.academic-research.md"
+    CLAUDE_PROFILE_NAME="CLAUDE.academic-research.md"
     ;;
   general-project|general|project)
     PROFILE="general-project"
@@ -97,6 +100,7 @@ case "$PROJECT_TYPE" in
     CURSOR_RULE_NAME="general-project-memory-bank.mdc"
     COPILOT_PROFILE_NAME="general-project-memory.instructions.md"
     CODEX_PROFILE_NAME="AGENTS.general-project.md"
+    CLAUDE_PROFILE_NAME="CLAUDE.general-project.md"
     ;;
   *)
     die "unknown project type: $PROJECT_TYPE"
@@ -109,8 +113,9 @@ CURSOR_RULE_SRC="$AGENT_RULES_ROOT/cursor/$CURSOR_RULE_NAME"
 COPILOT_BASE_SRC="$AGENT_RULES_ROOT/github-copilot/.github/copilot-instructions.md"
 COPILOT_PROFILE_SRC="$AGENT_RULES_ROOT/github-copilot/.github/instructions/$COPILOT_PROFILE_NAME"
 CODEX_PROFILE_SRC="$AGENT_RULES_ROOT/codex/$CODEX_PROFILE_NAME"
+CLAUDE_PROFILE_SRC="$AGENT_RULES_ROOT/claude-code/$CLAUDE_PROFILE_NAME"
 
-for required in "$TEMPLATE_DIR" "$CURSOR_RULE_SRC" "$COPILOT_BASE_SRC" "$COPILOT_PROFILE_SRC" "$CODEX_PROFILE_SRC"; do
+for required in "$TEMPLATE_DIR" "$CURSOR_RULE_SRC" "$COPILOT_BASE_SRC" "$COPILOT_PROFILE_SRC" "$CODEX_PROFILE_SRC" "$CLAUDE_PROFILE_SRC"; do
   [ -e "$required" ] || die "required source not found: $required"
 done
 
@@ -193,6 +198,7 @@ copy_file "$CURSOR_RULE_SRC" "$TARGET_ROOT/.cursor/rules/$CURSOR_RULE_NAME"
 copy_file "$COPILOT_BASE_SRC" "$TARGET_ROOT/.github/copilot-instructions.md"
 copy_file "$COPILOT_PROFILE_SRC" "$TARGET_ROOT/.github/instructions/$COPILOT_PROFILE_NAME"
 copy_file "$CODEX_PROFILE_SRC" "$TARGET_ROOT/AGENTS.md"
+copy_file "$CLAUDE_PROFILE_SRC" "$TARGET_ROOT/CLAUDE.md"
 warn_conflicting_profiles
 
-log "Done. Cursor, GitHub Copilot, and Codex are configured to share memory-bank/."
+log "Done. Cursor, GitHub Copilot, Codex, and Claude Code are configured to share memory-bank/."
