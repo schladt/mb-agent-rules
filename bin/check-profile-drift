@@ -7,7 +7,7 @@
 # Exit 0 if all profiles agree across all four tools, 1 otherwise.
 set -euo pipefail
 
-DEFAULT_AGENT_RULES_ROOT="$HOME/projects/agent-rules"
+DEFAULT_AGENT_RULES_ROOT="$HOME/projects/mb-agent-rules"
 AGENT_RULES_ROOT="${AGENT_RULES_ROOT:-$DEFAULT_AGENT_RULES_ROOT}"
 
 if [ ! -d "$AGENT_RULES_ROOT" ]; then

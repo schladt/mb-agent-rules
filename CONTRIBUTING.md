@@ -1,11 +1,11 @@
-# Contributing to Agent Rules Lab
+# Contributing to Memory Bank Agent Rules
 
 This document covers development of this repo itself — adding profiles, modifying tool instructions, and verifying consistency. For end-user setup, see [README.md](README.md).
 
 ## Repository Layout
 
 ```
-agent-rules/
+mb-agent-rules/
 ├── bin/
 │   ├── init-agent-rules        # bootstrap a profile in a target project
 │   └── check-profile-drift     # verify the four tool variants of each profile agree

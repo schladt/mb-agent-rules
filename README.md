@@ -1,6 +1,6 @@
-# Agent Rules Lab
+# Memory Bank Agent Rules
 
-The Agent Rules Lab is a configuration repository that solves one specific problem: keeping a single, shared, project-local "memory bank" workflow consistent across four AI coding agents — **Cursor**, **GitHub Copilot**, **Codex**, and **Claude Code**.
+Memory Bank Agent Rules is a configuration repository that solves one specific problem: keeping a single, shared, project-local "memory bank" workflow consistent across four AI coding agents — **Cursor**, **GitHub Copilot**, **Codex**, and **Claude Code**.
 
 The core model:
 
@@ -15,12 +15,12 @@ Do not maintain separate memory banks for the four tools. They should all read a
 
 ```bash
 mkdir -p ~/.local/bin
-ln -sf "$HOME/projects/agent-rules/bin/init-agent-rules" ~/.local/bin/init-agent-rules
+ln -sf "$HOME/projects/mb-agent-rules/bin/init-agent-rules" ~/.local/bin/init-agent-rules
 ```
 
 A symlink is recommended so updates from `git pull` propagate automatically.
 
-If this repo lives somewhere other than `$HOME/projects/agent-rules`, either edit `DEFAULT_AGENT_RULES_ROOT` at the top of the script or set `AGENT_RULES_ROOT=/path/to/agent-rules` when running the command.
+If this repo lives somewhere other than `$HOME/projects/mb-agent-rules`, either edit `DEFAULT_AGENT_RULES_ROOT` at the top of the script or set `AGENT_RULES_ROOT=/path/to/mb-agent-rules` when running the command.
 
 ## Quick Start
 
@@ -64,22 +64,22 @@ If you only want to configure one tool, replace `<profile>` with `pentest`, `aca
 ```bash
 # Memory bank (always required first)
 mkdir -p your-project/memory-bank
-cp -R agent-rules/templates/<profile>-memory-bank/. your-project/memory-bank/
+cp -R mb-agent-rules/templates/<profile>-memory-bank/. your-project/memory-bank/
 
 # Cursor
 mkdir -p your-project/.cursor/rules
-cp agent-rules/cursor/<profile>-memory-bank.mdc your-project/.cursor/rules/
+cp mb-agent-rules/cursor/<profile>-memory-bank.mdc your-project/.cursor/rules/
 
 # GitHub Copilot
 mkdir -p your-project/.github/instructions
-cp agent-rules/github-copilot/.github/copilot-instructions.md your-project/.github/
-cp agent-rules/github-copilot/.github/instructions/<profile>-memory.instructions.md your-project/.github/instructions/
+cp mb-agent-rules/github-copilot/.github/copilot-instructions.md your-project/.github/
+cp mb-agent-rules/github-copilot/.github/instructions/<profile>-memory.instructions.md your-project/.github/instructions/
 
 # Codex
-cp agent-rules/codex/AGENTS.<profile>.md your-project/AGENTS.md
+cp mb-agent-rules/codex/AGENTS.<profile>.md your-project/AGENTS.md
 
 # Claude Code
-cp agent-rules/claude-code/CLAUDE.<profile>.md your-project/CLAUDE.md
+cp mb-agent-rules/claude-code/CLAUDE.<profile>.md your-project/CLAUDE.md
 ```
 
 Do not place multiple Copilot profile instructions with `applyTo: "**"` in the same project — Copilot will ask which one governs the work.

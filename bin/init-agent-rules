@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_AGENT_RULES_ROOT="$HOME/projects/agent-rules"
+DEFAULT_AGENT_RULES_ROOT="$HOME/projects/mb-agent-rules"
 AGENT_RULES_ROOT="${AGENT_RULES_ROOT:-$DEFAULT_AGENT_RULES_ROOT}"
 FORCE=0
 DRY_RUN=0
@@ -32,7 +32,7 @@ Run this command from the root of the target project. It initializes:
 
 By default, existing files are not overwritten. Use --force to overwrite
 profile-managed files. Set AGENT_RULES_ROOT to override:
-  AGENT_RULES_ROOT=/path/to/agent-rules init-agent-rules general-project
+  AGENT_RULES_ROOT=/path/to/mb-agent-rules init-agent-rules general-project
 USAGE
 }
 
