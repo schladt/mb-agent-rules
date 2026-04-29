@@ -1,344 +1,124 @@
 # Agent Rules Lab
 
-Rule and template files for local memory-bank workflows across:
+The Agent Rules Lab is a configuration repository that solves one specific problem: keeping a single, shared, project-local "memory bank" workflow consistent across four AI coding agents — **Cursor**, **GitHub Copilot**, **Codex**, and **Claude Code**.
 
-- Cursor
-- GitHub Copilot (VS Code)
-- Codex (VS Code)
-- Claude Code (VS Code)
+The core model:
 
-The core model is:
+- **One memory bank, many agents** — all four tools read and update the same `memory-bank/` directory in the target project.
+- **Three profiles** for different work types: `pentest`, `academic-research`, `general-project`. Each has its own file schema.
+- **One bootstrap command** (`bin/init-agent-rules`) copies the right templates and tool-specific instruction files into the target project.
+- **Shared lifecycle**: read memory → work → update memory → end the response with `Memory bank: consulted and updated`.
 
-1. Choose one project memory-bank profile.
-2. Bootstrap one shared `memory-bank/` directory in the target project.
-3. Configure any or all supported agentic environments to use that same directory.
+Do not maintain separate memory banks for the four tools. They should all read and update the same project-local `PROJECT_ROOT/memory-bank/` files.
 
-Do not create separate memory banks for Cursor, Copilot, Codex, and Claude Code. They should all read and update the same project-local `PROJECT_ROOT/memory-bank/` files.
+## Install
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$HOME/projects/agent-rules/bin/init-agent-rules" ~/.local/bin/init-agent-rules
+```
+
+A symlink is recommended so updates from `git pull` propagate automatically.
+
+If this repo lives somewhere other than `$HOME/projects/agent-rules`, either edit `DEFAULT_AGENT_RULES_ROOT` at the top of the script or set `AGENT_RULES_ROOT=/path/to/agent-rules` when running the command.
 
 ## Quick Start
 
-Install the helper command:
-
-```bash
-mkdir -p ~/.local/bin
-install -m 0755 "$HOME/projects/agent-rules/bin/init-agent-rules" ~/.local/bin/init-agent-rules
-```
-
-From the target project root, initialize one profile and all supported agentic environments:
+From the target project root:
 
 ```bash
 init-agent-rules general-project
 ```
 
-Use one of these project type arguments:
+Project type — pick exactly one:
 
-- `pentest`
-- `academic-research`
-- `general-project`
+- `pentest` (aliases: `hardware-pentest`, `software-pentest`)
+- `academic-research` (aliases: `academic`, `research`)
+- `general-project` (aliases: `general`, `project`)
 
-Preview before writing files:
+Options:
 
-```bash
-init-agent-rules general-project --dry-run
-```
+- `--dry-run` — preview without writing.
+- `--force` — overwrite existing profile-managed files.
 
-If this repository is not at `$HOME/projects/agent-rules`, either edit `DEFAULT_AGENT_RULES_ROOT` at the top of `bin/init-agent-rules` or run with:
+This bootstraps `memory-bank/` plus instruction files for **all four** agentic environments at once. Each tool then reads/updates the same shared memory bank.
 
-```bash
-AGENT_RULES_ROOT=/path/to/agent-rules init-agent-rules general-project
-```
+## Profiles
 
-The helper configures `memory-bank/`, Cursor, GitHub Copilot, Codex, and Claude Code. For manual setup or single-agent setup, use the detailed sections below.
+| Profile | Use for | Required `memory-bank/*.md` files |
+|---|---|---|
+| `pentest` | Hardware/software pentest engagements | `projectBrief`, `scopeAuthorization`, `targets`, `activeContext`, `findings`, `progress`, `evidenceIndex` |
+| `academic-research` | Research projects | `researchBrief`, `researchQuestions`, `literatureNotes`, `methodology`, `sourcesIndex`, `activeContext`, `progress`, `openQuestions` |
+| `general-project` | Software / general work | `projectBrief`, `requirements`, `decisions`, `activeContext`, `progress`, `risks`, `handoff` |
 
-## Supported Profiles
+Authority files (treated as source of truth; agents stop and ask when these are unclear):
 
-- Pentest: hardware/software pentest engagement memory with scope, targets, findings, and evidence.
-- Academic research: research project memory with questions, methodology, literature notes, sources, and open questions.
-- General project: broad project memory with requirements, decisions, risks, progress, and handoff context.
+- Pentest: `scopeAuthorization.md`, `targets.md`, `projectBrief.md`
+- Research: `researchBrief.md`, `researchQuestions.md`, `methodology.md`
+- General: `projectBrief.md`, `requirements.md`
 
-Choose exactly one profile per target project unless you intentionally maintain separate memory banks for separate streams of work.
+## Manual Setup (single tool)
 
-## Project Memory Bank Template Setup
-
-This is the project-state setup. Do this once per target project, and choose exactly one project type.
-
-### Pentest
+If you only want to configure one tool, replace `<profile>` with `pentest`, `academic-research`, or `general-project`:
 
 ```bash
-mkdir -p /path/to/your-project/memory-bank
-cp -R /path/to/agent-rules/templates/pentest-memory-bank/. /path/to/your-project/memory-bank/
+# Memory bank (always required first)
+mkdir -p your-project/memory-bank
+cp -R agent-rules/templates/<profile>-memory-bank/. your-project/memory-bank/
+
+# Cursor
+mkdir -p your-project/.cursor/rules
+cp agent-rules/cursor/<profile>-memory-bank.mdc your-project/.cursor/rules/
+
+# GitHub Copilot
+mkdir -p your-project/.github/instructions
+cp agent-rules/github-copilot/.github/copilot-instructions.md your-project/.github/
+cp agent-rules/github-copilot/.github/instructions/<profile>-memory.instructions.md your-project/.github/instructions/
+
+# Codex
+cp agent-rules/codex/AGENTS.<profile>.md your-project/AGENTS.md
+
+# Claude Code
+cp agent-rules/claude-code/CLAUDE.<profile>.md your-project/CLAUDE.md
 ```
 
-### Academic Research
+Do not place multiple Copilot profile instructions with `applyTo: "**"` in the same project — Copilot will ask which one governs the work.
 
-```bash
-mkdir -p /path/to/your-project/memory-bank
-cp -R /path/to/agent-rules/templates/academic-research-memory-bank/. /path/to/your-project/memory-bank/
-```
+## Optional Extras
 
-### General Project
+**Cursor global rule** — paste-able User Rule for cross-project behavior:
 
-```bash
-mkdir -p /path/to/your-project/memory-bank
-cp -R /path/to/agent-rules/templates/general-project-memory-bank/. /path/to/your-project/memory-bank/
-```
-
-### Profile File Sets
-
-Pentest memory bank:
-
-- `memory-bank/projectBrief.md`
-- `memory-bank/scopeAuthorization.md`
-- `memory-bank/targets.md`
-- `memory-bank/activeContext.md`
-- `memory-bank/findings.md`
-- `memory-bank/progress.md`
-- `memory-bank/evidenceIndex.md`
-
-Academic research memory bank:
-
-- `memory-bank/researchBrief.md`
-- `memory-bank/researchQuestions.md`
-- `memory-bank/literatureNotes.md`
-- `memory-bank/methodology.md`
-- `memory-bank/sourcesIndex.md`
-- `memory-bank/activeContext.md`
-- `memory-bank/progress.md`
-- `memory-bank/openQuestions.md`
-
-General project memory bank:
-
-- `memory-bank/projectBrief.md`
-- `memory-bank/requirements.md`
-- `memory-bank/decisions.md`
-- `memory-bank/activeContext.md`
-- `memory-bank/progress.md`
-- `memory-bank/risks.md`
-- `memory-bank/handoff.md`
-
-## Agentic Environment Setup
-
-This is the tool-instruction setup. It is separate from template setup.
-
-After bootstrapping exactly one project memory-bank profile, you may configure Cursor, GitHub Copilot, Codex, Claude Code, or all of them. When configuring multiple environments in the same project, always use the matching profile instructions for the memory-bank profile you chose.
-
-### Automated All-Environment Setup
-
-Use `bin/init-agent-rules` when you want to bootstrap the selected project memory-bank profile and configure Cursor, GitHub Copilot, Codex, and Claude Code in one step.
-
-Install it somewhere on your `PATH`:
-
-```bash
-mkdir -p ~/.local/bin
-install -m 0755 "$HOME/projects/agent-rules/bin/init-agent-rules" ~/.local/bin/init-agent-rules
-```
-
-Run it from the target project root:
-
-```bash
-init-agent-rules general-project
-```
-
-Supported project type arguments:
-
-- `pentest`
-- `academic-research`
-- `general-project`
-
-Useful options:
-
-- `--dry-run`: print the files that would be created or skipped.
-- `--force`: overwrite existing profile-managed files.
-
-The script defaults to `$HOME/projects/agent-rules`. If this repository lives somewhere else, edit `DEFAULT_AGENT_RULES_ROOT` at the top of the script or override it at runtime:
-
-```bash
-AGENT_RULES_ROOT=/path/to/agent-rules init-agent-rules general-project
-```
-
-The script does not remove other profile instruction files. If it finds profile files that may conflict, it prints a warning so you can remove them intentionally.
-
-### Cursor
-
-Use one project-scoped Cursor rule:
-
-```bash
-mkdir -p /path/to/your-project/.cursor/rules
-cp /path/to/agent-rules/cursor/pentest-memory-bank.mdc /path/to/your-project/.cursor/rules/pentest-memory-bank.mdc
-```
-
-Swap the source file for another profile when needed:
-
-- Academic research: `cursor/academic-research-memory-bank.mdc`
-- General project: `cursor/general-project-memory-bank.mdc`
-
-Optional global behavior:
-
-1. Open the matching `cursor/cursor-global-*-memory-bank-rule.md` file.
+1. Open `cursor/cursor-global-<profile>-memory-bank-rule.md`.
 2. Copy the `BEGIN RULE` to `END RULE` block.
-3. Paste it into Cursor `Settings -> Rules` as a User Rule.
+3. Paste into Cursor `Settings → Rules` as a User Rule.
 
-### GitHub Copilot
+**Codex global baseline** — keep personal defaults in `~/.codex/AGENTS.md`, project-specific behavior in the project `AGENTS.md`.
 
-```bash
-mkdir -p /path/to/your-project/.github/instructions
-cp /path/to/agent-rules/github-copilot/.github/copilot-instructions.md /path/to/your-project/.github/copilot-instructions.md
-cp /path/to/agent-rules/github-copilot/.github/instructions/pentest-memory.instructions.md /path/to/your-project/.github/instructions/pentest-memory.instructions.md
-```
+**Claude Code personal preferences** — keep in `~/.claude/CLAUDE.md` or `CLAUDE.local.md`, not in the shared project `CLAUDE.md`.
 
-Copy the shared profile selector plus exactly one profile instruction file.
+**Claude Code helpers** (auto-installed by `init-agent-rules`, profile-agnostic — they read `CLAUDE.md` to discover the active profile):
 
-Swap the second source file for another profile when needed:
-
-- Academic research: `github-copilot/.github/instructions/academic-research-memory.instructions.md`
-- General project: `github-copilot/.github/instructions/general-project-memory.instructions.md`
-
-Do not copy multiple Copilot profile instruction files with `applyTo: "**"` into the same project unless you intentionally want Copilot to ask which profile governs the work.
-
-### Codex
-
-```bash
-cp /path/to/agent-rules/codex/AGENTS.pentest.md /path/to/your-project/AGENTS.md
-```
-
-Copy exactly one profile file into the target project root as `AGENTS.md`.
-
-Swap the source file for another profile when needed:
-
-- Academic research: `codex/AGENTS.academic-research.md`
-- General project: `codex/AGENTS.general-project.md`
-
-Optional global baseline for all projects:
-
-- `~/.codex/AGENTS.md`
-
-Recommended:
-
-- Keep baseline personal defaults in `~/.codex/AGENTS.md`.
-- Keep project-specific memory-bank behavior in the target repo `AGENTS.md`.
-
-### Claude Code
-
-Claude Code project instructions live in `CLAUDE.md`. The Claude Code VS Code extension and CLI both use Claude Code's shared configuration and project-instruction behavior.
-
-```bash
-cp /path/to/agent-rules/claude-code/CLAUDE.pentest.md /path/to/your-project/CLAUDE.md
-```
-
-Swap the source file for another profile when needed:
-
-- Academic research: `claude-code/CLAUDE.academic-research.md`
-- General project: `claude-code/CLAUDE.general-project.md`
-
-Recommended:
-
-- Keep project-specific memory-bank behavior in the target repo `CLAUDE.md`.
-- Keep personal Claude Code preferences in `~/.claude/CLAUDE.md` or `CLAUDE.local.md`, not in the shared project profile.
-- Treat this repository's `memory-bank/` as shared project memory; Claude Code auto memory is separate and machine-local.
-
-## Using Multiple Environments Together
-
-This is supported. Bootstrap the memory bank once, then install the matching rule/instruction files for each agentic environment.
-
-Example general project layout after configuring all supported environments:
-
-```text
-your-project/
-  memory-bank/
-    projectBrief.md
-    requirements.md
-    decisions.md
-    activeContext.md
-    progress.md
-    risks.md
-    handoff.md
-  .cursor/
-    rules/
-      general-project-memory-bank.mdc
-  .github/
-    copilot-instructions.md
-    instructions/
-      general-project-memory.instructions.md
-  AGENTS.md
-  CLAUDE.md
-```
-
-Example setup for a general project using all supported environments:
-
-```bash
-mkdir -p /path/to/your-project/memory-bank
-cp -R /path/to/agent-rules/templates/general-project-memory-bank/. /path/to/your-project/memory-bank/
-
-mkdir -p /path/to/your-project/.cursor/rules
-cp /path/to/agent-rules/cursor/general-project-memory-bank.mdc /path/to/your-project/.cursor/rules/general-project-memory-bank.mdc
-
-mkdir -p /path/to/your-project/.github/instructions
-cp /path/to/agent-rules/github-copilot/.github/copilot-instructions.md /path/to/your-project/.github/copilot-instructions.md
-cp /path/to/agent-rules/github-copilot/.github/instructions/general-project-memory.instructions.md /path/to/your-project/.github/instructions/general-project-memory.instructions.md
-
-cp /path/to/agent-rules/codex/AGENTS.general-project.md /path/to/your-project/AGENTS.md
-cp /path/to/agent-rules/claude-code/CLAUDE.general-project.md /path/to/your-project/CLAUDE.md
-```
+- `/memory-bootstrap` — slash command that creates `memory-bank/` and required files.
+- `/memory-update` — slash command that runs the end-of-task update step.
+- `memory-keeper` — subagent that consults and updates the memory bank in an isolated context.
 
 ## Operating Model
 
 Every profile follows the same lifecycle:
 
-1. Read the active profile's `memory-bank/*` files before planning or execution.
+1. Read the active profile's `memory-bank/*` files before planning or executing.
 2. Treat the profile's authority files as source of truth.
 3. Stop and ask when scope, authorization, ethics, data permissions, requirements, ownership, or production impact is unclear.
-4. Keep sensitive data out of memory files.
-5. Update profile-specific memory files before the final response.
-6. Include this line in final outputs:
+4. Keep sensitive data (secrets, credentials, payloads, PII, restricted datasets) out of memory files — store references to secure locations instead.
+5. Update the profile-specific memory files before the final response.
+6. Final responses include the line: `Memory bank: consulted and updated`.
 
-- `Memory bank: consulted and updated`
+When switching tools mid-project, tell the next tool to read `memory-bank/*` first and continue from the current active context.
 
-When switching between Cursor, Copilot, Codex, and Claude Code, start the next tool by telling it to read `memory-bank/*` first and continue from the current active context.
+## Switching Profiles
 
-## Repository Layout
+`init-agent-rules` does not delete instruction files from other profiles. If you change a project's profile, remove the old profile's files manually — the script warns about conflicts but won't touch them.
 
-Command and templates:
+---
 
-- `bin/init-agent-rules`
-- `templates/pentest-memory-bank/`
-- `templates/academic-research-memory-bank/`
-- `templates/general-project-memory-bank/`
-- `templates/memory-bank/` legacy pentest alias retained for backwards compatibility
-
-Cursor rules:
-
-- `cursor/cursor-global-pentest-memory-bank-rule.md`
-- `cursor/cursor-global-academic-research-memory-bank-rule.md`
-- `cursor/cursor-global-general-project-memory-bank-rule.md`
-- `cursor/pentest-memory-bank.mdc`
-- `cursor/academic-research-memory-bank.mdc`
-- `cursor/general-project-memory-bank.mdc`
-
-GitHub Copilot instructions:
-
-- `github-copilot/.github/copilot-instructions.md`
-- `github-copilot/.github/instructions/pentest-memory.instructions.md`
-- `github-copilot/.github/instructions/academic-research-memory.instructions.md`
-- `github-copilot/.github/instructions/general-project-memory.instructions.md`
-
-Codex instructions:
-
-- `codex/AGENTS.md` legacy pentest profile
-- `codex/AGENTS.pentest.md`
-- `codex/AGENTS.academic-research.md`
-- `codex/AGENTS.general-project.md`
-
-Claude Code instructions:
-
-- `claude-code/CLAUDE.pentest.md`
-- `claude-code/CLAUDE.academic-research.md`
-- `claude-code/CLAUDE.general-project.md`
-
-## Why This Structure
-
-- The lifecycle is shared, but the memory schema matches the project type.
-- Pentest projects need scope, targets, findings, and evidence.
-- Academic research projects need research questions, methodology, source tracking, and literature notes.
-- General projects need requirements, decisions, risks, and handoff context.
-- Cursor `.mdc`, Copilot `.github/*`, Codex `AGENTS.md`, and Claude Code `CLAUDE.md` map cleanly to each platform's native instruction system.
-- Memory remains local to each project and version-controllable.
+Developing or contributing to this repo? See [CONTRIBUTING.md](CONTRIBUTING.md).

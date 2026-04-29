@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Detect drift between the four tool variants of each memory-bank profile.
+# For each profile, extracts the set of `memory-bank/*.md` filenames declared
+# as required by the Cursor, GitHub Copilot, Codex, and Claude Code instruction
+# files, and reports any difference.
+#
+# Exit 0 if all profiles agree across all four tools, 1 otherwise.
+set -euo pipefail
+
+DEFAULT_AGENT_RULES_ROOT="$HOME/projects/agent-rules"
+AGENT_RULES_ROOT="${AGENT_RULES_ROOT:-$DEFAULT_AGENT_RULES_ROOT}"
+
+if [ ! -d "$AGENT_RULES_ROOT" ]; then
+  printf 'error: AGENT_RULES_ROOT not found: %s\n' "$AGENT_RULES_ROOT" >&2
+  exit 2
+fi
+
+profiles=(pentest academic-research general-project)
+exit_status=0
+
+extract_required_files() {
+  # Print each unique `memory-bank/<name>.md` reference, one per line, sorted.
+  grep -oE 'memory-bank/[A-Za-z][A-Za-z0-9_-]*\.md' "$1" 2>/dev/null \
+    | sort -u
+}
+
+compare_profile() {
+  profile="$1"
+
+  cursor_file="$AGENT_RULES_ROOT/cursor/${profile}-memory-bank.mdc"
+  copilot_file="$AGENT_RULES_ROOT/github-copilot/.github/instructions/${profile}-memory.instructions.md"
+  case "$profile" in
+    pentest)            copilot_file="$AGENT_RULES_ROOT/github-copilot/.github/instructions/pentest-memory.instructions.md" ;;
+    academic-research)  copilot_file="$AGENT_RULES_ROOT/github-copilot/.github/instructions/academic-research-memory.instructions.md" ;;
+    general-project)    copilot_file="$AGENT_RULES_ROOT/github-copilot/.github/instructions/general-project-memory.instructions.md" ;;
+  esac
+  codex_file="$AGENT_RULES_ROOT/codex/AGENTS.${profile}.md"
+  claude_file="$AGENT_RULES_ROOT/claude-code/CLAUDE.${profile}.md"
+
+  for f in "$cursor_file" "$copilot_file" "$codex_file" "$claude_file"; do
+    if [ ! -f "$f" ]; then
+      printf '[%s] missing source: %s\n' "$profile" "$f" >&2
+      exit_status=1
+      return
+    fi
+  done
+
+  cursor_set=$(extract_required_files "$cursor_file")
+  copilot_set=$(extract_required_files "$copilot_file")
+  codex_set=$(extract_required_files "$codex_file")
+  claude_set=$(extract_required_files "$claude_file")
+
+  if [ "$cursor_set" = "$copilot_set" ] \
+    && [ "$copilot_set" = "$codex_set" ] \
+    && [ "$codex_set" = "$claude_set" ]; then
+    printf '[%s] OK (%d required files agreed across all 4 tools)\n' \
+      "$profile" "$(printf '%s\n' "$cursor_set" | grep -c .)"
+    return
+  fi
+
+  printf '[%s] DRIFT detected\n' "$profile"
+  exit_status=1
+
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' RETURN
+
+  printf '%s\n' "$cursor_set"  > "$tmpdir/cursor"
+  printf '%s\n' "$copilot_set" > "$tmpdir/copilot"
+  printf '%s\n' "$codex_set"   > "$tmpdir/codex"
+  printf '%s\n' "$claude_set"  > "$tmpdir/claude"
+
+  union=$(cat "$tmpdir"/* | sort -u)
+  printf '  %-40s %-7s %-7s %-7s %-7s\n' "file" "cursor" "copilot" "codex" "claude"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    c=$(grep -Fxq "$line" "$tmpdir/cursor"  && echo yes || echo "-")
+    p=$(grep -Fxq "$line" "$tmpdir/copilot" && echo yes || echo "-")
+    x=$(grep -Fxq "$line" "$tmpdir/codex"   && echo yes || echo "-")
+    k=$(grep -Fxq "$line" "$tmpdir/claude"  && echo yes || echo "-")
+    printf '  %-40s %-7s %-7s %-7s %-7s\n' "$line" "$c" "$p" "$x" "$k"
+  done <<< "$union"
+}
+
+for p in "${profiles[@]}"; do
+  compare_profile "$p"
+done
+
+exit "$exit_status"

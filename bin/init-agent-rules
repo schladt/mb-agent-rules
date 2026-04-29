@@ -166,6 +166,18 @@ copy_template_dir() {
   done < <(find "$template_dir" -type f -print0 | sort -z)
 }
 
+copy_optional_dir() {
+  src_dir="$1"
+  dest_dir="$2"
+
+  [ -d "$src_dir" ] || return 0
+
+  while IFS= read -r -d '' src; do
+    rel="${src#$src_dir/}"
+    copy_file "$src" "$dest_dir/$rel"
+  done < <(find "$src_dir" -type f -print0 | sort -z)
+}
+
 warn_conflicting_profiles() {
   expected_cursor=".cursor/rules/$CURSOR_RULE_NAME"
   expected_copilot=".github/instructions/$COPILOT_PROFILE_NAME"
@@ -199,6 +211,8 @@ copy_file "$COPILOT_BASE_SRC" "$TARGET_ROOT/.github/copilot-instructions.md"
 copy_file "$COPILOT_PROFILE_SRC" "$TARGET_ROOT/.github/instructions/$COPILOT_PROFILE_NAME"
 copy_file "$CODEX_PROFILE_SRC" "$TARGET_ROOT/AGENTS.md"
 copy_file "$CLAUDE_PROFILE_SRC" "$TARGET_ROOT/CLAUDE.md"
+copy_optional_dir "$AGENT_RULES_ROOT/claude-code/.claude/commands" "$TARGET_ROOT/.claude/commands"
+copy_optional_dir "$AGENT_RULES_ROOT/claude-code/.claude/agents" "$TARGET_ROOT/.claude/agents"
 warn_conflicting_profiles
 
 log "Done. Cursor, GitHub Copilot, Codex, and Claude Code are configured to share memory-bank/."

@@ -1,3 +1,5 @@
+<!-- Legacy alias retained for backwards compatibility. Prefer AGENTS.pentest.md in new setups. -->
+
 # Pentest Memory Bank Instructions (Codex)
 
 Use a project-local memory bank for all hardware/software pentest work.

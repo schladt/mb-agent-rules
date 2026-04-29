@@ -1,5 +1,7 @@
-# memory bank files
-memory-bank/
-AGENTS.md
-CLAUDE.md
-.github/
+# Ignore agent artifacts at the repo root only.
+# These are deliberately anchored with a leading slash so the source folders
+# (e.g. github-copilot/.github/, templates/memory-bank/) are not matched.
+/memory-bank/
+/AGENTS.md
+/CLAUDE.md
+/.github/
