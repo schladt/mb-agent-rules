@@ -1,15 +1,13 @@
 # Memory Bank Agent Rules
 
-Memory Bank Agent Rules is a configuration repository that solves one specific problem: keeping a single, shared, project-local "memory bank" workflow consistent across four AI coding agents — **Cursor**, **GitHub Copilot**, **Codex**, and **Claude Code**.
+Memory Bank Agent Rules keeps a single, shared, project-local "memory bank" consistent across AI coding agents — **Cursor**, **GitHub Copilot**, **Codex**, and **Claude Code**.
 
 The core model:
 
-- **One memory bank, many agents** — all four tools read and update the same `memory-bank/` directory in the target project.
+- **One memory bank, one instruction file** — all tools read `AGENTS.md` (or `CLAUDE.md` for Claude Code) and update the same `memory-bank/` directory.
 - **Three profiles** for different work types: `pentest`, `academic-research`, `general-project`. Each has its own file schema.
-- **One bootstrap command** (`bin/init-agent-rules`) copies the right templates and tool-specific instruction files into the target project.
-- **Shared lifecycle**: read memory → work → update memory → end the response with `Memory bank: consulted and updated`.
-
-Do not maintain separate memory banks for the four tools. They should all read and update the same project-local `PROJECT_ROOT/memory-bank/` files.
+- **One bootstrap command** (`bin/init-agent-rules`) copies the right templates and a universal `AGENTS.md` into the target project.
+- **Shared lifecycle**: read memory → work → update memory → report status on every response.
 
 ## Install
 
@@ -30,6 +28,22 @@ From the target project root:
 init-agent-rules general-project
 ```
 
+This creates:
+
+```
+your-project/
+├── AGENTS.md          # universal agent instructions (read by Cursor, Copilot, Codex)
+├── CLAUDE.md          # identical mirror (read by Claude Code)
+└── memory-bank/
+    ├── projectBrief.md
+    ├── requirements.md
+    ├── decisions.md
+    ├── activeContext.md
+    ├── progress.md
+    ├── risks.md
+    └── handoff.md
+```
+
 Project type — pick exactly one:
 
 - `pentest` (aliases: `hardware-pentest`, `software-pentest`)
@@ -41,7 +55,16 @@ Options:
 - `--dry-run` — preview without writing.
 - `--force` — overwrite existing profile-managed files.
 
-This bootstraps `memory-bank/` plus instruction files for **all four** agentic environments at once. Each tool then reads/updates the same shared memory bank.
+## How It Works
+
+`AGENTS.md` is the [universal standard](https://agents.md/) for AI coding agent instructions (Agentic AI Foundation, Linux Foundation). It is read natively by:
+
+- **Cursor** — reads `AGENTS.md` and `CLAUDE.md` from project root, always applied.
+- **GitHub Copilot** — reads `AGENTS.md` as agent instructions.
+- **Codex** — reads `AGENTS.md` as its primary instruction file.
+- **Claude Code** — reads `CLAUDE.md` from project root.
+
+`init-agent-rules` copies the same instructions as both `AGENTS.md` and `CLAUDE.md` so all four tools are covered with zero configuration.
 
 ## Profiles
 
@@ -57,80 +80,6 @@ Authority files (treated as source of truth; agents stop and ask when these are 
 - Research: `researchBrief.md`, `researchQuestions.md`, `methodology.md`
 - General: `projectBrief.md`, `requirements.md`
 
-## Manual Setup (single tool)
-
-If you only want to configure one tool, replace `<profile>` with `pentest`, `academic-research`, or `general-project`:
-
-```bash
-# Memory bank (always required first)
-mkdir -p your-project/memory-bank
-cp -R mb-agent-rules/templates/<profile>-memory-bank/. your-project/memory-bank/
-
-# Cursor
-mkdir -p your-project/.cursor/rules
-cp mb-agent-rules/cursor/<profile>-memory-bank.mdc your-project/.cursor/rules/
-
-# GitHub Copilot
-mkdir -p your-project/.github/instructions
-cp mb-agent-rules/github-copilot/.github/copilot-instructions.md your-project/.github/
-cp mb-agent-rules/github-copilot/.github/instructions/<profile>-memory.instructions.md your-project/.github/instructions/
-
-# Codex
-cp mb-agent-rules/codex/AGENTS.<profile>.md your-project/AGENTS.md
-
-# Claude Code
-cp mb-agent-rules/claude-code/CLAUDE.<profile>.md your-project/CLAUDE.md
-```
-
-Do not place multiple Copilot profile instructions with `applyTo: "**"` in the same project — Copilot will ask which one governs the work.
-
-## Cross-Tool Native Support
-
-`AGENTS.md` is now a [universal standard](https://agents.md/) under the Agentic AI Foundation (Linux Foundation). Multiple tools read overlapping files natively:
-
-| File | Cursor | Copilot | Codex | Claude Code |
-|---|---|---|---|---|
-| `.cursor/rules/*.mdc` | yes | | | |
-| `AGENTS.md` | yes | yes | yes | |
-| `CLAUDE.md` | yes | | | yes |
-| `.github/copilot-instructions.md` | | yes | | |
-| `.github/instructions/*.instructions.md` | | yes | | |
-| `.claude/skills/`, `.claude/agents/` | | | | yes |
-
-`init-agent-rules` installs **all** of these on purpose. The tool-specific files add features that `AGENTS.md` alone cannot provide:
-
-- Cursor `.mdc` rules support `alwaysApply`, `globs`, and `description` for conditional activation.
-- Copilot `.instructions.md` files support `applyTo` glob scoping and `excludeAgent` to exclude code review.
-- Claude Code skills auto-load on description match; subagents run in isolated context windows.
-
-The overlap between `AGENTS.md`/`CLAUDE.md` and tool-specific files is intentional and harmless — the instructions are consistent, so tools that read multiple sources simply reinforce the same workflow.
-
-## Optional Extras
-
-**Cursor global rule** — paste-able User Rule for cross-project behavior:
-
-1. Open `cursor/cursor-global-<profile>-memory-bank-rule.md`.
-2. Copy the `BEGIN RULE` to `END RULE` block.
-3. Paste into Cursor `Settings → Rules` as a User Rule.
-
-**Codex global baseline** — keep personal defaults in `~/.codex/AGENTS.md`, project-specific behavior in the project `AGENTS.md`. Codex discovers `AGENTS.md` hierarchically: `~/.codex/AGENTS.md` → project root → working directory (one file per level, closest wins). Combined instructions are capped at 32 KiB by default (`project_doc_max_bytes` in `~/.codex/config.toml`). Use `AGENTS.override.md` at any level for temporary overrides. Use `codex --print-instructions` to see exactly what Codex loaded.
-
-**Claude Code personal preferences** — keep in `~/.claude/CLAUDE.md` or `CLAUDE.local.md`, not in the shared project `CLAUDE.md`.
-
-**Claude Code helpers** (auto-installed by `init-agent-rules`, profile-agnostic — they read `CLAUDE.md` to discover the active profile):
-
-- `memory-bootstrap` — skill that creates `memory-bank/` and required files. Auto-invoked when Claude detects a missing memory bank, or run manually as `/memory-bootstrap`.
-- `memory-update` — skill that runs the end-of-task update step. Auto-invoked at task completion, or run manually as `/memory-update`.
-- `memory-keeper` — subagent that consults and updates the memory bank in an isolated context window (runs on Haiku to save tokens).
-- Legacy `/memory-bootstrap` and `/memory-update` slash commands are also installed for backwards compatibility.
-
-## Verifying What Each Tool Loads
-
-- **Codex**: `codex --print-instructions` dumps the merged AGENTS.md content.
-- **Cursor**: Open `Cursor Settings → Rules, Commands` to see all active rules and their status.
-- **Copilot**: Custom instructions are listed in the Copilot settings panel in VS Code / GitHub.
-- **Claude Code**: Ask Claude "what instructions are you following?" or check `CLAUDE.md` at project root.
-
 ## Operating Model
 
 Every profile follows the same lifecycle:
@@ -139,14 +88,32 @@ Every profile follows the same lifecycle:
 2. Treat the profile's authority files as source of truth.
 3. Stop and ask when scope, authorization, ethics, data permissions, requirements, ownership, or production impact is unclear.
 4. Keep sensitive data (secrets, credentials, payloads, PII, restricted datasets) out of memory files — store references to secure locations instead.
-5. Update the profile-specific memory files before the final response.
-6. Final responses include the line: `Memory bank: consulted and updated`.
+5. Update the profile-specific memory files when significant progress is made.
+6. **Every response** must end with a memory bank status line:
 
-When switching tools mid-project, tell the next tool to read `memory-bank/*` first and continue from the current active context.
+```
+Memory bank: updated — activeContext.md, progress.md
+Memory bank: read, no update needed
+Memory bank: not consulted
+```
+
+This is non-negotiable. The agent must report its memory bank interaction on every single response.
 
 ## Switching Profiles
 
-`init-agent-rules` does not delete instruction files from other profiles. If you change a project's profile, remove the old profile's files manually — the script warns about conflicts but won't touch them.
+`init-agent-rules` does not delete files from other profiles. If you change a project's profile, remove the old `memory-bank/` files manually.
+
+## Migration from Previous Versions
+
+If you used an earlier version of this project that installed tool-specific files, you can safely delete:
+
+- `.cursor/rules/*-memory-bank.mdc`
+- `.github/copilot-instructions.md`
+- `.github/instructions/*-memory.instructions.md`
+- `.claude/commands/`, `.claude/skills/`, `.claude/agents/`
+- `CLAUDE.md` (will be re-created by `init-agent-rules`)
+
+Then re-run `init-agent-rules <profile>` to install the simplified `AGENTS.md` + `CLAUDE.md`.
 
 ---
 

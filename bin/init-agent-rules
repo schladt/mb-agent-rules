@@ -23,12 +23,9 @@ Aliases:
   general-project: general, project
 
 Run this command from the root of the target project. It initializes:
-  memory-bank/ from the selected project type template
-  .cursor/rules/<profile>-memory-bank.mdc
-  .github/copilot-instructions.md
-  .github/instructions/<profile>-memory.instructions.md
-  AGENTS.md
-  CLAUDE.md
+  memory-bank/   from the selected project type template
+  AGENTS.md      universal agent instructions
+  CLAUDE.md      identical copy of AGENTS.md (for Claude Code compatibility)
 
 By default, existing files are not overwritten. Use --force to overwrite
 profile-managed files. Set AGENT_RULES_ROOT to override:
@@ -81,26 +78,14 @@ case "$PROJECT_TYPE" in
   pentest|hardware-pentest|software-pentest)
     PROFILE="pentest"
     TEMPLATE_DIR_NAME="pentest-memory-bank"
-    CURSOR_RULE_NAME="pentest-memory-bank.mdc"
-    COPILOT_PROFILE_NAME="pentest-memory.instructions.md"
-    CODEX_PROFILE_NAME="AGENTS.pentest.md"
-    CLAUDE_PROFILE_NAME="CLAUDE.pentest.md"
     ;;
   academic-research|academic|research)
     PROFILE="academic-research"
     TEMPLATE_DIR_NAME="academic-research-memory-bank"
-    CURSOR_RULE_NAME="academic-research-memory-bank.mdc"
-    COPILOT_PROFILE_NAME="academic-research-memory.instructions.md"
-    CODEX_PROFILE_NAME="AGENTS.academic-research.md"
-    CLAUDE_PROFILE_NAME="CLAUDE.academic-research.md"
     ;;
   general-project|general|project)
     PROFILE="general-project"
     TEMPLATE_DIR_NAME="general-project-memory-bank"
-    CURSOR_RULE_NAME="general-project-memory-bank.mdc"
-    COPILOT_PROFILE_NAME="general-project-memory.instructions.md"
-    CODEX_PROFILE_NAME="AGENTS.general-project.md"
-    CLAUDE_PROFILE_NAME="CLAUDE.general-project.md"
     ;;
   *)
     die "unknown project type: $PROJECT_TYPE"
@@ -109,13 +94,9 @@ esac
 
 TARGET_ROOT="$(pwd -P)"
 TEMPLATE_DIR="$AGENT_RULES_ROOT/templates/$TEMPLATE_DIR_NAME"
-CURSOR_RULE_SRC="$AGENT_RULES_ROOT/cursor/$CURSOR_RULE_NAME"
-COPILOT_BASE_SRC="$AGENT_RULES_ROOT/github-copilot/.github/copilot-instructions.md"
-COPILOT_PROFILE_SRC="$AGENT_RULES_ROOT/github-copilot/.github/instructions/$COPILOT_PROFILE_NAME"
-CODEX_PROFILE_SRC="$AGENT_RULES_ROOT/codex/$CODEX_PROFILE_NAME"
-CLAUDE_PROFILE_SRC="$AGENT_RULES_ROOT/claude-code/$CLAUDE_PROFILE_NAME"
+INSTRUCTIONS_SRC="$AGENT_RULES_ROOT/instructions/AGENTS.${PROFILE}.md"
 
-for required in "$TEMPLATE_DIR" "$CURSOR_RULE_SRC" "$COPILOT_BASE_SRC" "$COPILOT_PROFILE_SRC" "$CODEX_PROFILE_SRC" "$CLAUDE_PROFILE_SRC"; do
+for required in "$TEMPLATE_DIR" "$INSTRUCTIONS_SRC"; do
   [ -e "$required" ] || die "required source not found: $required"
 done
 
@@ -170,62 +151,48 @@ copy_template_dir() {
   done < <(find "$template_dir" -type f -print0 | sort -z)
 }
 
-copy_optional_dir() {
-  local src_dir="$1"
-  local dest_dir="$2"
-  local src rel
+copy_as_claude() {
+  local src="$1"
+  local dest="$2"
+  local existed=0
 
-  [ -d "$src_dir" ] || return 0
+  run_mkdir "$(dirname "$dest")"
 
-  while IFS= read -r -d '' src; do
-    rel="${src#$src_dir/}"
-    copy_file "$src" "$dest_dir/$rel"
-  done < <(find "$src_dir" -type f -print0 | sort -z)
-}
+  [ -e "$dest" ] && existed=1
 
-warn_conflicting_profiles() {
-  local expected_cursor=".cursor/rules/$CURSOR_RULE_NAME"
-  local expected_copilot=".github/instructions/$COPILOT_PROFILE_NAME"
-  local candidate
+  if [ "$existed" -eq 1 ] && [ "$FORCE" -ne 1 ]; then
+    log "skip existing: ${dest#$TARGET_ROOT/}"
+    return 0
+  fi
 
-  for candidate in \
-    ".cursor/rules/pentest-memory-bank.mdc" \
-    ".cursor/rules/academic-research-memory-bank.mdc" \
-    ".cursor/rules/general-project-memory-bank.mdc"; do
-    if [ "$candidate" != "$expected_cursor" ] && [ -e "$TARGET_ROOT/$candidate" ]; then
-      log "warning: existing Cursor profile rule may conflict: $candidate"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    if [ "$existed" -eq 1 ]; then
+      log "overwrite: ${dest#$TARGET_ROOT/} (mirror of AGENTS.md)"
+    else
+      log "copy: ${dest#$TARGET_ROOT/} (mirror of AGENTS.md)"
     fi
-  done
-
-  for candidate in \
-    ".github/instructions/pentest-memory.instructions.md" \
-    ".github/instructions/academic-research-memory.instructions.md" \
-    ".github/instructions/general-project-memory.instructions.md"; do
-    if [ "$candidate" != "$expected_copilot" ] && [ -e "$TARGET_ROOT/$candidate" ]; then
-      log "warning: existing Copilot profile instruction may conflict: $candidate"
+  else
+    {
+      printf '<!-- This file is identical to AGENTS.md. Edit AGENTS.md and re-run init-agent-rules to update both. -->\n\n'
+      cat "$src"
+    } > "$dest"
+    if [ "$existed" -eq 1 ]; then
+      log "wrote: ${dest#$TARGET_ROOT/}"
+    else
+      log "created: ${dest#$TARGET_ROOT/}"
     fi
-  done
-
-  log ""
-  log "note: Cursor reads AGENTS.md and CLAUDE.md natively alongside .cursor/rules/*.mdc."
-  log "note: GitHub Copilot reads AGENTS.md natively alongside .github/instructions/."
-  log "note: This overlap is intentional — tool-specific files add features (globs, excludeAgent)"
-  log "note: that AGENTS.md/CLAUDE.md alone cannot provide."
+  fi
 }
 
 log "Initializing agent rules in: $TARGET_ROOT"
 log "Project type: $PROFILE"
-log "Agent rules root: $AGENT_RULES_ROOT"
+log ""
 
 copy_template_dir "$TEMPLATE_DIR" "$TARGET_ROOT/memory-bank"
-copy_file "$CURSOR_RULE_SRC" "$TARGET_ROOT/.cursor/rules/$CURSOR_RULE_NAME"
-copy_file "$COPILOT_BASE_SRC" "$TARGET_ROOT/.github/copilot-instructions.md"
-copy_file "$COPILOT_PROFILE_SRC" "$TARGET_ROOT/.github/instructions/$COPILOT_PROFILE_NAME"
-copy_file "$CODEX_PROFILE_SRC" "$TARGET_ROOT/AGENTS.md"
-copy_file "$CLAUDE_PROFILE_SRC" "$TARGET_ROOT/CLAUDE.md"
-copy_optional_dir "$AGENT_RULES_ROOT/claude-code/.claude/commands" "$TARGET_ROOT/.claude/commands"
-copy_optional_dir "$AGENT_RULES_ROOT/claude-code/.claude/skills" "$TARGET_ROOT/.claude/skills"
-copy_optional_dir "$AGENT_RULES_ROOT/claude-code/.claude/agents" "$TARGET_ROOT/.claude/agents"
-warn_conflicting_profiles
+copy_file "$INSTRUCTIONS_SRC" "$TARGET_ROOT/AGENTS.md"
+copy_as_claude "$INSTRUCTIONS_SRC" "$TARGET_ROOT/CLAUDE.md"
 
-log "Done. Cursor, GitHub Copilot, Codex, and Claude Code are configured to share memory-bank/."
+log ""
+log "Done. AGENTS.md and CLAUDE.md are installed with shared memory-bank/ templates."
+log "AGENTS.md is read by Cursor, GitHub Copilot, and Codex."
+log "CLAUDE.md is read by Claude Code (and Cursor)."

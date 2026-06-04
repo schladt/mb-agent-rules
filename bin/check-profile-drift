@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# Detect drift between the four tool variants and templates of each memory-bank
-# profile. For each profile, extracts the set of `memory-bank/*.md` filenames
-# declared as required by the Cursor, GitHub Copilot, Codex, and Claude Code
-# instruction files, compares them against the actual template files, and
-# reports any difference.
-#
-# Exit 0 if all profiles agree across all four tools + templates, 1 otherwise.
+# Verify that each profile's AGENTS.md references exactly the files present in
+# the corresponding template directory. Exit 0 if all profiles agree, 1 on drift.
 set -euo pipefail
 
 DEFAULT_AGENT_RULES_ROOT="$HOME/projects/mb-agent-rules"
@@ -19,8 +14,7 @@ fi
 profiles=(pentest academic-research general-project)
 exit_status=0
 
-extract_required_files() {
-  # Print each unique `memory-bank/<name>.md` reference, one per line, sorted.
+extract_instruction_files() {
   grep -oE 'memory-bank/[A-Za-z][A-Za-z0-9_-]*\.md' "$1" 2>/dev/null \
     | sort -u
 }
@@ -34,73 +28,48 @@ extract_template_files() {
 
 compare_profile() {
   local profile="$1"
-
-  local cursor_file="$AGENT_RULES_ROOT/cursor/${profile}-memory-bank.mdc"
-  local copilot_file="$AGENT_RULES_ROOT/github-copilot/.github/instructions/${profile}-memory.instructions.md"
-  local codex_file="$AGENT_RULES_ROOT/codex/AGENTS.${profile}.md"
-  local claude_file="$AGENT_RULES_ROOT/claude-code/CLAUDE.${profile}.md"
+  local instructions_file="$AGENT_RULES_ROOT/instructions/AGENTS.${profile}.md"
   local template_dir="$AGENT_RULES_ROOT/templates/${profile}-memory-bank"
 
-  local f
-  for f in "$cursor_file" "$copilot_file" "$codex_file" "$claude_file"; do
-    if [ ! -f "$f" ]; then
-      printf '[%s] missing source: %s\n' "$profile" "$f" >&2
-      exit_status=1
-      return
-    fi
-  done
+  if [ ! -f "$instructions_file" ]; then
+    printf '[%s] missing: %s\n' "$profile" "$instructions_file" >&2
+    exit_status=1
+    return
+  fi
 
-  local cursor_set copilot_set codex_set claude_set template_set
-  cursor_set=$(extract_required_files "$cursor_file")
-  copilot_set=$(extract_required_files "$copilot_file")
-  codex_set=$(extract_required_files "$codex_file")
-  claude_set=$(extract_required_files "$claude_file")
+  if [ ! -d "$template_dir" ]; then
+    printf '[%s] missing: %s\n' "$profile" "$template_dir" >&2
+    exit_status=1
+    return
+  fi
+
+  local instruction_set template_set
+  instruction_set=$(extract_instruction_files "$instructions_file")
   template_set=$(extract_template_files "$template_dir")
 
-  local all_agree=1
-  if [ "$cursor_set" != "$copilot_set" ] \
-    || [ "$copilot_set" != "$codex_set" ] \
-    || [ "$codex_set" != "$claude_set" ]; then
-    all_agree=0
-  fi
-
-  local template_agrees=1
-  if [ -n "$template_set" ] && [ "$cursor_set" != "$template_set" ]; then
-    template_agrees=0
-  fi
-
-  if [ "$all_agree" -eq 1 ] && [ "$template_agrees" -eq 1 ]; then
-    printf '[%s] OK (%d required files agreed across all 4 tools + templates)\n' \
-      "$profile" "$(printf '%s\n' "$cursor_set" | grep -c .)"
+  if [ "$instruction_set" = "$template_set" ]; then
+    local count
+    count=$(printf '%s\n' "$instruction_set" | grep -c . || true)
+    printf '[%s] OK (%d files agreed between instructions and templates)\n' \
+      "$profile" "$count"
     return
   fi
 
   printf '[%s] DRIFT detected\n' "$profile"
   exit_status=1
 
-  local tmpdir
-  tmpdir=$(mktemp -d)
-  trap 'rm -rf "$tmpdir"' RETURN
+  local only_in_instructions only_in_templates
+  only_in_instructions=$(comm -23 <(echo "$instruction_set") <(echo "$template_set"))
+  only_in_templates=$(comm -13 <(echo "$instruction_set") <(echo "$template_set"))
 
-  printf '%s\n' "$cursor_set"   > "$tmpdir/cursor"
-  printf '%s\n' "$copilot_set"  > "$tmpdir/copilot"
-  printf '%s\n' "$codex_set"    > "$tmpdir/codex"
-  printf '%s\n' "$claude_set"   > "$tmpdir/claude"
-  printf '%s\n' "$template_set" > "$tmpdir/template"
-
-  local union
-  union=$(cat "$tmpdir"/* | sort -u)
-  printf '  %-40s %-7s %-7s %-7s %-7s %-8s\n' "file" "cursor" "copilot" "codex" "claude" "template"
-  local line c p x k t
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    c=$(grep -Fxq "$line" "$tmpdir/cursor"   && echo yes || echo "-")
-    p=$(grep -Fxq "$line" "$tmpdir/copilot"  && echo yes || echo "-")
-    x=$(grep -Fxq "$line" "$tmpdir/codex"    && echo yes || echo "-")
-    k=$(grep -Fxq "$line" "$tmpdir/claude"   && echo yes || echo "-")
-    t=$(grep -Fxq "$line" "$tmpdir/template" && echo yes || echo "-")
-    printf '  %-40s %-7s %-7s %-7s %-7s %-8s\n' "$line" "$c" "$p" "$x" "$k" "$t"
-  done <<< "$union"
+  if [ -n "$only_in_instructions" ]; then
+    printf '  in AGENTS.md but not in templates/:\n'
+    printf '    %s\n' $only_in_instructions
+  fi
+  if [ -n "$only_in_templates" ]; then
+    printf '  in templates/ but not in AGENTS.md:\n'
+    printf '    %s\n' $only_in_templates
+  fi
 }
 
 for p in "${profiles[@]}"; do
