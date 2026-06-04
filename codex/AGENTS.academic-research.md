@@ -1,4 +1,4 @@
-# Academic Research Memory Bank Instructions (Codex)
+# Academic Research Memory Bank Instructions
 
 Use a project-local memory bank for academic research work.
 

@@ -26,7 +26,8 @@ mb-agent-rules/
 └── claude-code/
     ├── CLAUDE.<profile>.md
     └── .claude/
-        ├── commands/{memory-bootstrap,memory-update}.md
+        ├── commands/{memory-bootstrap,memory-update}.md  # legacy slash commands
+        ├── skills/{memory-bootstrap,memory-update}/SKILL.md
         └── agents/memory-keeper.md
 ```
 
@@ -35,10 +36,10 @@ mb-agent-rules/
 - The lifecycle is shared, but the memory schema matches the project type. Pentest needs scope/findings/evidence; research needs questions/methodology/sources; general work needs requirements/decisions/risks.
 - For each profile, all four tool variants must reference the same set of `memory-bank/*.md` required files. Drift breaks the "one memory bank, many agents" guarantee.
 - File-format conventions follow the canonical, current format for each tool:
-  - **Cursor**: `.cursor/rules/*.mdc` with frontmatter (`description`, `globs`, `alwaysApply`).
-  - **GitHub Copilot**: `.github/copilot-instructions.md` plus `.github/instructions/*.instructions.md` with `applyTo:` frontmatter.
-  - **Codex**: `AGENTS.md` at project root.
-  - **Claude Code**: `CLAUDE.md` at project root; optional `.claude/commands/*.md` slash commands and `.claude/agents/*.md` subagents.
+  - **Cursor**: `.cursor/rules/*.mdc` with frontmatter (`description`, `alwaysApply`). Cursor also reads `AGENTS.md` and `CLAUDE.md` natively.
+  - **GitHub Copilot**: `.github/copilot-instructions.md` plus `.github/instructions/*.instructions.md` with `applyTo:` and `excludeAgent:` frontmatter. Copilot also reads `AGENTS.md` natively.
+  - **Codex**: `AGENTS.md` at project root (universal standard under the Agentic AI Foundation). Supports hierarchical discovery and `AGENTS.override.md`.
+  - **Claude Code**: `CLAUDE.md` at project root; `.claude/skills/*/SKILL.md` for on-demand workflows; `.claude/agents/*.md` subagents. Legacy `.claude/commands/*.md` slash commands are retained for backwards compatibility.
 - Memory remains local to each project and version-controllable.
 
 ## Drift Check
@@ -49,7 +50,7 @@ After modifying any per-tool instruction file, run:
 bin/check-profile-drift
 ```
 
-For each profile, this extracts the set of `memory-bank/*.md` filenames declared as required across the Cursor `.mdc`, Copilot `.instructions.md`, Codex `AGENTS.<profile>.md`, and Claude Code `CLAUDE.<profile>.md` files, then reports any divergence. Exits 1 on drift. Honors `AGENT_RULES_ROOT`.
+For each profile, this extracts the set of `memory-bank/*.md` filenames declared as required across the Cursor `.mdc`, Copilot `.instructions.md`, Codex `AGENTS.<profile>.md`, and Claude Code `CLAUDE.<profile>.md` files, compares them against the actual template files in `templates/<profile>-memory-bank/`, and reports any divergence. Exits 1 on drift. Honors `AGENT_RULES_ROOT`.
 
 ## Modifying an Existing Profile
 
@@ -93,7 +94,7 @@ When you change the canonical pentest files, mirror the change into these legacy
 `bin/init-agent-rules` defaults to copying source files but supports `--dry-run` and `--force`. When adding new sources to be installed:
 
 - Required-source presence is checked at startup via the `for required in ... do [ -e ] || die done` block — add new required files there if they should block the run.
-- Use `copy_optional_dir` for new tree-shaped helpers (e.g. the Claude Code `.claude/commands/` and `.claude/agents/` trees) — it is a no-op when the source dir does not exist, which is the right behavior for optional add-ons.
+- Use `copy_optional_dir` for new tree-shaped helpers (e.g. the Claude Code `.claude/commands/`, `.claude/skills/`, and `.claude/agents/` trees) — it is a no-op when the source dir does not exist, which is the right behavior for optional add-ons.
 
 ## Style
 

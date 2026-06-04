@@ -1,4 +1,4 @@
-# General Project Memory Bank Instructions (Codex)
+# General Project Memory Bank Instructions
 
 Use a project-local memory bank for general project work.
 

@@ -128,25 +128,28 @@ run_mkdir() {
 }
 
 copy_file() {
-  src="$1"
-  dest="$2"
+  local src="$1"
+  local dest="$2"
+  local existed=0
 
   run_mkdir "$(dirname "$dest")"
 
-  if [ -e "$dest" ] && [ "$FORCE" -ne 1 ]; then
+  [ -e "$dest" ] && existed=1
+
+  if [ "$existed" -eq 1 ] && [ "$FORCE" -ne 1 ]; then
     log "skip existing: ${dest#$TARGET_ROOT/}"
     return 0
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    if [ -e "$dest" ]; then
+    if [ "$existed" -eq 1 ]; then
       log "overwrite: ${dest#$TARGET_ROOT/} <- $src"
     else
       log "copy: ${dest#$TARGET_ROOT/} <- $src"
     fi
   else
     cp "$src" "$dest"
-    if [ -e "$dest" ] && [ "$FORCE" -eq 1 ]; then
+    if [ "$existed" -eq 1 ]; then
       log "wrote: ${dest#$TARGET_ROOT/}"
     else
       log "created: ${dest#$TARGET_ROOT/}"
@@ -155,8 +158,9 @@ copy_file() {
 }
 
 copy_template_dir() {
-  template_dir="$1"
-  dest_dir="$2"
+  local template_dir="$1"
+  local dest_dir="$2"
+  local src rel
 
   run_mkdir "$dest_dir"
 
@@ -167,8 +171,9 @@ copy_template_dir() {
 }
 
 copy_optional_dir() {
-  src_dir="$1"
-  dest_dir="$2"
+  local src_dir="$1"
+  local dest_dir="$2"
+  local src rel
 
   [ -d "$src_dir" ] || return 0
 
@@ -179,8 +184,9 @@ copy_optional_dir() {
 }
 
 warn_conflicting_profiles() {
-  expected_cursor=".cursor/rules/$CURSOR_RULE_NAME"
-  expected_copilot=".github/instructions/$COPILOT_PROFILE_NAME"
+  local expected_cursor=".cursor/rules/$CURSOR_RULE_NAME"
+  local expected_copilot=".github/instructions/$COPILOT_PROFILE_NAME"
+  local candidate
 
   for candidate in \
     ".cursor/rules/pentest-memory-bank.mdc" \
@@ -199,6 +205,12 @@ warn_conflicting_profiles() {
       log "warning: existing Copilot profile instruction may conflict: $candidate"
     fi
   done
+
+  log ""
+  log "note: Cursor reads AGENTS.md and CLAUDE.md natively alongside .cursor/rules/*.mdc."
+  log "note: GitHub Copilot reads AGENTS.md natively alongside .github/instructions/."
+  log "note: This overlap is intentional — tool-specific files add features (globs, excludeAgent)"
+  log "note: that AGENTS.md/CLAUDE.md alone cannot provide."
 }
 
 log "Initializing agent rules in: $TARGET_ROOT"
@@ -212,6 +224,7 @@ copy_file "$COPILOT_PROFILE_SRC" "$TARGET_ROOT/.github/instructions/$COPILOT_PRO
 copy_file "$CODEX_PROFILE_SRC" "$TARGET_ROOT/AGENTS.md"
 copy_file "$CLAUDE_PROFILE_SRC" "$TARGET_ROOT/CLAUDE.md"
 copy_optional_dir "$AGENT_RULES_ROOT/claude-code/.claude/commands" "$TARGET_ROOT/.claude/commands"
+copy_optional_dir "$AGENT_RULES_ROOT/claude-code/.claude/skills" "$TARGET_ROOT/.claude/skills"
 copy_optional_dir "$AGENT_RULES_ROOT/claude-code/.claude/agents" "$TARGET_ROOT/.claude/agents"
 warn_conflicting_profiles
 

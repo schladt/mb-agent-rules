@@ -1,5 +1,6 @@
 ---
 applyTo: "**"
+excludeAgent: "code-review"
 ---
 
 # General Project Memory Bank Workflow

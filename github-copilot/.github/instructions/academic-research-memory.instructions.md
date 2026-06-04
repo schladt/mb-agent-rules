@@ -1,5 +1,6 @@
 ---
 applyTo: "**"
+excludeAgent: "code-review"
 ---
 
 # Academic Research Memory Bank Workflow

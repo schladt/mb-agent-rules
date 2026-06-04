@@ -1,6 +1,5 @@
 ---
 description: Enforce a local memory-bank workflow for general projects with requirements, decisions, risks, and handoff tracking.
-globs: []
 alwaysApply: true
 ---
 
