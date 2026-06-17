@@ -5,6 +5,7 @@ DEFAULT_AGENT_RULES_ROOT="$HOME/projects/mb-agent-rules"
 AGENT_RULES_ROOT="${AGENT_RULES_ROOT:-$DEFAULT_AGENT_RULES_ROOT}"
 FORCE=0
 DRY_RUN=0
+ALLOW_OVERWRITE=0
 PROJECT_TYPE=""
 
 usage() {
@@ -27,8 +28,20 @@ Run this command from the root of the target project. It initializes:
   AGENTS.md      universal agent instructions
   CLAUDE.md      identical copy of AGENTS.md (for Claude Code compatibility)
 
-By default, existing files are not overwritten. Use --force to overwrite
-profile-managed files. Set AGENT_RULES_ROOT to override:
+Existing installs are detected:
+  - Nothing exists yet            -> fresh scaffolding is created.
+  - Memory bank matches profile   -> nothing is changed.
+  - Same file schema, stale rules -> AGENTS.md / CLAUDE.md are refreshed;
+                                     memory-bank/ is left untouched.
+  - File schema does NOT match    -> the old memory bank is backed up to
+    (e.g. profile changed, or a      .old/memory-bank-<timestamp>/, fresh
+     newer profile added files)      scaffolding is created, and you are
+                                     told to ask your agent to migrate the
+                                     old data into the new files.
+
+Use --force to overwrite all profile-managed files in place WITHOUT a
+backup or migration prompt (power-user escape hatch). Set AGENT_RULES_ROOT
+to override the source location:
   AGENT_RULES_ROOT=/path/to/mb-agent-rules init-agent-rules general-project
 USAGE
 }
@@ -95,17 +108,30 @@ esac
 TARGET_ROOT="$(pwd -P)"
 TEMPLATE_DIR="$AGENT_RULES_ROOT/templates/$TEMPLATE_DIR_NAME"
 INSTRUCTIONS_SRC="$AGENT_RULES_ROOT/instructions/AGENTS.${PROFILE}.md"
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 for required in "$TEMPLATE_DIR" "$INSTRUCTIONS_SRC"; do
   [ -e "$required" ] || die "required source not found: $required"
 done
 
+# Required memory-bank file names for this profile (the canonical schema).
+REQUIRED_FILES=()
+while IFS= read -r f; do
+  REQUIRED_FILES+=("$(basename "$f")")
+done < <(find "$TEMPLATE_DIR" -maxdepth 1 -name '*.md' -type f | sort)
+
 run_mkdir() {
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "mkdir -p $1"
+    log "mkdir -p ${1#$TARGET_ROOT/}"
   else
     mkdir -p "$1"
   fi
+}
+
+# Emit the exact CLAUDE.md mirror content for the current instruction source.
+expected_claude() {
+  printf '<!-- This file is identical to AGENTS.md. Edit AGENTS.md and re-run init-agent-rules to update both. -->\n\n'
+  cat "$INSTRUCTIONS_SRC"
 }
 
 copy_file() {
@@ -117,16 +143,16 @@ copy_file() {
 
   [ -e "$dest" ] && existed=1
 
-  if [ "$existed" -eq 1 ] && [ "$FORCE" -ne 1 ]; then
+  if [ "$existed" -eq 1 ] && [ "$FORCE" -ne 1 ] && [ "$ALLOW_OVERWRITE" -ne 1 ]; then
     log "skip existing: ${dest#$TARGET_ROOT/}"
     return 0
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
     if [ "$existed" -eq 1 ]; then
-      log "overwrite: ${dest#$TARGET_ROOT/} <- $src"
+      log "overwrite: ${dest#$TARGET_ROOT/} <- ${src#$AGENT_RULES_ROOT/}"
     else
-      log "copy: ${dest#$TARGET_ROOT/} <- $src"
+      log "copy: ${dest#$TARGET_ROOT/} <- ${src#$AGENT_RULES_ROOT/}"
     fi
   else
     cp "$src" "$dest"
@@ -152,15 +178,14 @@ copy_template_dir() {
 }
 
 copy_as_claude() {
-  local src="$1"
-  local dest="$2"
+  local dest="$1"
   local existed=0
 
   run_mkdir "$(dirname "$dest")"
 
   [ -e "$dest" ] && existed=1
 
-  if [ "$existed" -eq 1 ] && [ "$FORCE" -ne 1 ]; then
+  if [ "$existed" -eq 1 ] && [ "$FORCE" -ne 1 ] && [ "$ALLOW_OVERWRITE" -ne 1 ]; then
     log "skip existing: ${dest#$TARGET_ROOT/}"
     return 0
   fi
@@ -172,10 +197,7 @@ copy_as_claude() {
       log "copy: ${dest#$TARGET_ROOT/} (mirror of AGENTS.md)"
     fi
   else
-    {
-      printf '<!-- This file is identical to AGENTS.md. Edit AGENTS.md and re-run init-agent-rules to update both. -->\n\n'
-      cat "$src"
-    } > "$dest"
+    expected_claude > "$dest"
     if [ "$existed" -eq 1 ]; then
       log "wrote: ${dest#$TARGET_ROOT/}"
     else
@@ -184,15 +206,134 @@ copy_as_claude() {
   fi
 }
 
+# Move an existing path into the backup directory, preserving its basename.
+backup_one() {
+  local src="$1"
+  local dest_dir="$2"
+
+  [ -e "$src" ] || return 0
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "back up: ${src#$TARGET_ROOT/} -> ${dest_dir#$TARGET_ROOT/}/"
+  else
+    mkdir -p "$dest_dir"
+    mv "$src" "$dest_dir/"
+    log "backed up: ${src#$TARGET_ROOT/} -> ${dest_dir#$TARGET_ROOT/}/"
+  fi
+}
+
+# --- Detection helpers -----------------------------------------------------
+
+memory_bank_exists() {
+  [ -d "$TARGET_ROOT/memory-bank" ] || return 1
+  find "$TARGET_ROOT/memory-bank" -maxdepth 1 -name '*.md' -type f -print -quit \
+    2>/dev/null | grep -q .
+}
+
+# Every required file for this profile is present (extra files are ignored).
+structure_matches() {
+  local f
+  for f in "${REQUIRED_FILES[@]}"; do
+    [ -f "$TARGET_ROOT/memory-bank/$f" ] || return 1
+  done
+  return 0
+}
+
+# Installed AGENTS.md and CLAUDE.md are byte-identical to what we would write.
+rules_match() {
+  [ -f "$TARGET_ROOT/AGENTS.md" ] || return 1
+  [ -f "$TARGET_ROOT/CLAUDE.md" ] || return 1
+  diff -q "$TARGET_ROOT/AGENTS.md" "$INSTRUCTIONS_SRC" >/dev/null 2>&1 || return 1
+  diff -q "$TARGET_ROOT/CLAUDE.md" <(expected_claude) >/dev/null 2>&1 || return 1
+  return 0
+}
+
+# --- Scaffolding -----------------------------------------------------------
+
+scaffold_all() {
+  copy_template_dir "$TEMPLATE_DIR" "$TARGET_ROOT/memory-bank"
+  copy_file "$INSTRUCTIONS_SRC" "$TARGET_ROOT/AGENTS.md"
+  copy_as_claude "$TARGET_ROOT/CLAUDE.md"
+}
+
+print_migration_notice() {
+  local backup_dir="$1"
+  local rel="${backup_dir#$TARGET_ROOT/}"
+  log ""
+  log "========================================================================"
+  log "ACTION REQUIRED: migrate your old memory bank"
+  log "------------------------------------------------------------------------"
+  log "A memory bank existed but did not match the '$PROFILE' profile schema."
+  log "Your previous memory bank has been backed up to:"
+  log ""
+  log "    $rel/"
+  log ""
+  log "Fresh scaffolding was created in memory-bank/. The old content was NOT"
+  log "migrated automatically (a bash script cannot do this reliably)."
+  log ""
+  log "Ask your AI agent to do it, for example:"
+  log ""
+  log "    \"Migrate my memory bank from $rel/ into the new memory-bank/"
+  log "     scaffolding for the $PROFILE profile. Map old content to the new"
+  log "     files, preserve history, and mark anything superseded.\""
+  log "========================================================================"
+}
+
+# --- Main ------------------------------------------------------------------
+
 log "Initializing agent rules in: $TARGET_ROOT"
 log "Project type: $PROFILE"
 log ""
 
-copy_template_dir "$TEMPLATE_DIR" "$TARGET_ROOT/memory-bank"
-copy_file "$INSTRUCTIONS_SRC" "$TARGET_ROOT/AGENTS.md"
-copy_as_claude "$INSTRUCTIONS_SRC" "$TARGET_ROOT/CLAUDE.md"
+if [ "$FORCE" -eq 1 ]; then
+  log "--force: overwriting profile-managed files in place (no backup, no migration prompt)."
+  log ""
+  scaffold_all
+  log ""
+  log "Done. AGENTS.md and CLAUDE.md are installed with the memory-bank/ schema."
+  exit 0
+fi
 
+if ! memory_bank_exists; then
+  # Fresh install.
+  scaffold_all
+  log ""
+  log "Done. AGENTS.md and CLAUDE.md are installed with the memory-bank/ schema."
+  log "AGENTS.md is read by Cursor, GitHub Copilot, and Codex."
+  log "CLAUDE.md is read by Claude Code (and Cursor)."
+  exit 0
+fi
+
+# A memory bank already exists. Decide what to do.
+if structure_matches; then
+  if rules_match; then
+    log "Existing memory bank already matches the '$PROFILE' profile."
+    log "Nothing to do. (Use --force to rewrite profile-managed files in place.)"
+    exit 0
+  fi
+
+  # Same file schema, but the instruction files are stale. Refresh only the
+  # rules; leave the user's memory-bank/ content untouched.
+  log "Memory bank schema matches '$PROFILE', but AGENTS.md / CLAUDE.md are out of date."
+  log "Refreshing instructions only; memory-bank/ is left untouched."
+  log ""
+  ALLOW_OVERWRITE=1
+  copy_file "$INSTRUCTIONS_SRC" "$TARGET_ROOT/AGENTS.md"
+  copy_as_claude "$TARGET_ROOT/CLAUDE.md"
+  ALLOW_OVERWRITE=0
+  log ""
+  log "Done. Instructions refreshed; no memory data was changed."
+  exit 0
+fi
+
+# Structure mismatch: profile switched or schema changed. Back up and re-scaffold.
+BACKUP_DIR="$TARGET_ROOT/.old/memory-bank-$TIMESTAMP"
+log "Existing memory bank does NOT match the '$PROFILE' profile schema."
+log "Backing up the old memory bank and creating fresh scaffolding."
 log ""
-log "Done. AGENTS.md and CLAUDE.md are installed with shared memory-bank/ templates."
-log "AGENTS.md is read by Cursor, GitHub Copilot, and Codex."
-log "CLAUDE.md is read by Claude Code (and Cursor)."
+backup_one "$TARGET_ROOT/memory-bank" "$BACKUP_DIR"
+backup_one "$TARGET_ROOT/AGENTS.md" "$BACKUP_DIR"
+backup_one "$TARGET_ROOT/CLAUDE.md" "$BACKUP_DIR"
+log ""
+scaffold_all
+print_migration_notice "$BACKUP_DIR"

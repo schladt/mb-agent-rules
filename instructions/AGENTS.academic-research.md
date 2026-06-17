@@ -2,6 +2,8 @@
 
 Use a project-local memory bank for academic research work.
 
+**Core rule: if you change any file in the project, you MUST update the memory bank in the same response. The only exception is when you change no files. See the Response Contract.**
+
 ## Required Workflow
 
 ### 1) Bootstrap and Load
@@ -56,13 +58,17 @@ Also update `literatureNotes.md`, `researchQuestions.md`, `methodology.md`, or `
 
 ### 6) Response Contract
 
-Every response must end with a memory bank status line. No exceptions.
+Two rules, both mandatory.
+
+**Update rule (non-negotiable).** If you created, modified, or deleted ANY file in the project during this response — except files inside `memory-bank/` itself — you MUST update the memory bank in the SAME response. The only case where no update is required is when you changed zero project files. "Small", "trivial", or "obvious" changes are NOT exempt. When an update is required, update at minimum `activeContext.md` and `progress.md`, plus any other files named in Recording Rules and Completion Updates that apply.
+
+**Status line.** End every response with exactly one of:
 
 - `Memory bank: updated — <comma-separated list of files changed>`
-  Use when you modified one or more memory-bank/ files.
+  Required whenever you changed any project file (see the update rule).
 - `Memory bank: read, no update needed`
-  Use when you consulted memory-bank/ but no significant progress warrants an update.
+  Allowed ONLY when you changed zero project files.
 - `Memory bank: not consulted`
-  Use only for requests completely unrelated to project work.
+  Only for requests completely unrelated to this project.
 
-Never omit the status line. Never combine it with other output.
+Self-check before sending: if you changed any file outside `memory-bank/` and your status line is not `updated`, the contract is violated — stop and update the memory bank first. Never omit the status line. Never combine it with other output.

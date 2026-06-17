@@ -53,7 +53,22 @@ Project type — pick exactly one:
 Options:
 
 - `--dry-run` — preview without writing.
-- `--force` — overwrite existing profile-managed files.
+- `--force` — overwrite all profile-managed files in place, with no backup and no migration prompt (power-user escape hatch).
+
+### Re-running on an existing project
+
+`init-agent-rules` is safe to re-run. It detects what is already there and does the least destructive thing:
+
+| Situation | What happens |
+|---|---|
+| Nothing exists yet | Fresh scaffolding is created. |
+| Memory bank already matches the profile | Nothing is changed. |
+| Same file schema, but `AGENTS.md`/`CLAUDE.md` are stale | Only the instruction files are refreshed; `memory-bank/` is left untouched. |
+| File schema does **not** match (profile changed, or a newer profile added/removed files) | The old memory bank (plus `AGENTS.md`/`CLAUDE.md`) is moved to `.old/memory-bank-<timestamp>/`, fresh scaffolding is created, and you are told to ask your agent to migrate the old data. |
+
+Migrating old data is a content-mapping task a bash script cannot do reliably, so after a schema-mismatch re-init, ask your agent, e.g.:
+
+> "Migrate my memory bank from `.old/memory-bank-<timestamp>/` into the new `memory-bank/` scaffolding. Map old content to the new files, preserve history, and mark anything superseded."
 
 ## How It Works
 
@@ -88,20 +103,20 @@ Every profile follows the same lifecycle:
 2. Treat the profile's authority files as source of truth.
 3. Stop and ask when scope, authorization, ethics, data permissions, requirements, ownership, or production impact is unclear.
 4. Keep sensitive data (secrets, credentials, payloads, PII, restricted datasets) out of memory files — store references to secure locations instead.
-5. Update the profile-specific memory files when significant progress is made.
+5. **If the agent changes any file in the project, it MUST update the memory bank in the same response.** The only time an update is not required is when no files were changed. "Small" or "trivial" edits are not exempt — this is the rule that keeps the memory bank trustworthy.
 6. **Every response** must end with a memory bank status line:
 
 ```
-Memory bank: updated — activeContext.md, progress.md
-Memory bank: read, no update needed
-Memory bank: not consulted
+Memory bank: updated — activeContext.md, progress.md   # required whenever any file changed
+Memory bank: read, no update needed                    # allowed only when no file changed
+Memory bank: not consulted                             # only for unrelated requests
 ```
 
-This is non-negotiable. The agent must report its memory bank interaction on every single response.
+This is non-negotiable. The agent must report its memory bank interaction on every single response. The full contract — including the binary update rule and a pre-send self-check — lives in each profile's `instructions/AGENTS.<profile>.md`.
 
 ## Switching Profiles
 
-`init-agent-rules` does not delete files from other profiles. If you change a project's profile, remove the old `memory-bank/` files manually.
+Just re-run `init-agent-rules <new-profile>`. Because the new profile's file schema differs, the script detects the mismatch, backs up your existing memory bank to `.old/memory-bank-<timestamp>/`, and scaffolds the new profile. Then ask your agent to migrate the old data (see [Re-running on an existing project](#re-running-on-an-existing-project)).
 
 ## Migration from Previous Versions
 
