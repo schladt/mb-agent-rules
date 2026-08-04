@@ -5,7 +5,7 @@ Memory Bank Agent Rules keeps a single, shared, project-local "memory bank" cons
 The core model:
 
 - **One memory bank, one instruction file** — every tool reads the same `AGENTS.md` and updates the same `memory-bank/` directory. `CLAUDE.md` points at `AGENTS.md` rather than duplicating it.
-- **Three profiles** for different work types: `pentest`, `academic-research`, `general-project`. Each has its own file schema.
+- **Four profiles** for different work types: `pentest`, `academic-research`, `general-project`, `incident-response`. Each has its own file schema.
 - **One bootstrap command** (`bin/init-agent-rules`) installs the templates, `AGENTS.md`, `CLAUDE.md`, and a portable Agent Skill.
 - **Shared lifecycle**: read memory → work → update memory → report status on every response.
 - **Optional enforcement** (`bin/check-memory-freshness`) fails a commit or CI job when project files change without a memory bank update.
@@ -169,12 +169,26 @@ These are per-tool settings, so they are documented here rather than installed b
 | `pentest` | Hardware/software pentest engagements | `projectBrief`, `scopeAuthorization`, `targets`, `activeContext`, `findings`, `progress`, `evidenceIndex` |
 | `academic-research` | Research projects | `researchBrief`, `researchQuestions`, `literatureNotes`, `methodology`, `sourcesIndex`, `activeContext`, `progress`, `openQuestions` |
 | `general-project` | Software / general work | `projectBrief`, `requirements`, `decisions`, `activeContext`, `progress`, `risks`, `handoff` |
+| `incident-response` | Cyber incident response / DFIR engagements | `incidentBrief`, `scopeAuthorization`, `timeline`, `affectedAssets`, `indicators`, `findings`, `evidenceIndex`, `activeContext`, `progress` |
 
 Authority files (treated as source of truth; agents stop and ask when these are unclear):
 
 - Pentest: `scopeAuthorization.md`, `targets.md`, `projectBrief.md`
 - Research: `researchBrief.md`, `researchQuestions.md`, `methodology.md`
 - General: `projectBrief.md`, `requirements.md`
+- Incident response: `incidentBrief.md`, `scopeAuthorization.md`
+
+### Incident Response / DFIR
+
+This profile is stricter than the others, because incident notes are reconstructed later by people who were not present and are often defended in front of people who are hostile.
+
+- **Facts only.** Every timeline entry and finding cites an artifact ID or is explicitly labelled reported, assumed, or unverified. Observation and inference are recorded separately. No attribution without evidence. Values are never fabricated — an uncomputed hash is recorded as `PENDING HASH`, never guessed.
+- **Artifact intake.** When an analyst supplies anything — a log file, an export, a screenshot, pasted text, a verbal description — the agent hashes it (SHA-256), records a UTC ingest timestamp, copies it into `artifacts/` as `<ingest-utc>__<hash12>__<original-name>`, re-hashes the copy to verify, indexes it in `evidenceIndex.md` with an artifact ID, and places it on the timeline using the **event** time, not the ingest time. Non-file input is written to a file first so it can be hashed like anything else.
+- **Response actions are gated** on a named approver in `scopeAuthorization.md`, with a preserve-before-eradicate rule following order of volatility.
+- **Legal posture.** Notes may be discoverable and the engagement may be under privilege, so the agent records facts and refers legal conclusions to counsel. Notification deadlines are tracked as decided by counsel, never determined by the agent.
+- **Active adversary.** The agent does not assume the project environment is trustworthy, and flags when the memory bank may sit inside the compromised estate.
+
+Selecting this profile designates `artifacts/` as the sensitive data store, so acquired evidence can be written there without separate permission. Exclude it from version control.
 
 ## Operating Model
 

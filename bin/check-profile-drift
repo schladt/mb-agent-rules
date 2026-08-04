@@ -11,7 +11,7 @@ if [ ! -d "$AGENT_RULES_ROOT" ]; then
   exit 2
 fi
 
-profiles=(pentest academic-research general-project)
+profiles=(pentest academic-research general-project incident-response)
 exit_status=0
 
 extract_instruction_files() {

@@ -13,13 +13,15 @@ mb-agent-rules/
 ├── templates/
 │   ├── pentest-memory-bank/
 │   ├── academic-research-memory-bank/
-│   └── general-project-memory-bank/
+│   ├── general-project-memory-bank/
+│   └── incident-response-memory-bank/
 ├── skills/
 │   └── memory-bank/SKILL.md     # portable Agent Skill, profile-agnostic
 └── instructions/
     ├── AGENTS.pentest.md
     ├── AGENTS.academic-research.md
-    └── AGENTS.general-project.md
+    ├── AGENTS.general-project.md
+    └── AGENTS.incident-response.md
 ```
 
 ## Design Principles

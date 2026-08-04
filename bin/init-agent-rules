@@ -20,11 +20,13 @@ Project types:
   pentest
   academic-research
   general-project
+  incident-response
 
 Aliases:
   pentest: hardware-pentest, software-pentest
   academic-research: academic, research
   general-project: general, project
+  incident-response: incident, dfir, ir
 
 Run this command from the root of the target project. It initializes:
   memory-bank/                    from the selected project type template
@@ -127,6 +129,10 @@ case "$PROJECT_TYPE" in
   academic-research|academic|research)
     PROFILE="academic-research"
     TEMPLATE_DIR_NAME="academic-research-memory-bank"
+    ;;
+  incident-response|incident|dfir|ir)
+    PROFILE="incident-response"
+    TEMPLATE_DIR_NAME="incident-response-memory-bank"
     ;;
   general-project|general|project)
     PROFILE="general-project"
