@@ -183,7 +183,7 @@ Every profile follows the same lifecycle:
 1. Read the active profile's `memory-bank/*` files before planning or executing.
 2. Treat the profile's authority files as source of truth.
 3. Stop and ask when scope, authorization, ethics, data permissions, requirements, ownership, or production impact is unclear.
-4. Keep sensitive data (secrets, credentials, payloads, PII, restricted datasets) out of memory files — store references to secure locations instead.
+4. Keep sensitive data (secrets, credentials, payloads, PII, restricted datasets) out of memory files — store references to secure locations instead. Sensitive data may go to a store the project owner explicitly designated for it, such as a `findings/` or evidence directory; the agent warns when it writes there and never creates such a store on its own initiative.
 5. **If the agent changes any file in the project, it MUST update the memory bank in the same response.** The only time an update is not required is when no files were changed. "Small" or "trivial" edits are not exempt — this is the rule that keeps the memory bank trustworthy.
 6. **Every response** must end with a memory bank status line:
 
