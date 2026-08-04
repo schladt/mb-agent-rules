@@ -7,11 +7,14 @@ FORCE=0
 DRY_RUN=0
 ALLOW_OVERWRITE=0
 PROJECT_TYPE=""
+CLAUDE_MODE="import"
+SKILLS_DIR=".agents/skills"
+INSTALL_SKILL=1
 
 usage() {
   cat <<'USAGE'
 Usage:
-  init-agent-rules <project-type> [--force] [--dry-run]
+  init-agent-rules <project-type> [options]
 
 Project types:
   pentest
@@ -24,24 +27,36 @@ Aliases:
   general-project: general, project
 
 Run this command from the root of the target project. It initializes:
-  memory-bank/   from the selected project type template
-  AGENTS.md      universal agent instructions
-  CLAUDE.md      identical copy of AGENTS.md (for Claude Code compatibility)
+  memory-bank/                    from the selected project type template
+  AGENTS.md                       universal agent instructions
+  CLAUDE.md                       pointer to AGENTS.md (for Claude Code)
+  .agents/skills/memory-bank/     portable Agent Skill for memory bank work
+
+Options:
+  --claude-mode=MODE  how CLAUDE.md is written (default: import)
+                        import  one-line '@AGENTS.md' import; Claude Code
+                                expands it, other tools load almost nothing
+                        symlink CLAUDE.md -> AGENTS.md symlink
+                        copy    full duplicate of AGENTS.md (legacy; causes
+                                double-loading in tools that read both files)
+  --skills-dir=PATH   where to install the Agent Skill (default: .agents/skills)
+  --no-skill          do not install the Agent Skill
+  --dry-run           preview without writing
+  --force             overwrite all profile-managed files in place, with no
+                      backup and no migration prompt (power-user escape hatch)
 
 Existing installs are detected:
   - Nothing exists yet            -> fresh scaffolding is created.
   - Memory bank matches profile   -> nothing is changed.
-  - Same file schema, stale rules -> AGENTS.md / CLAUDE.md are refreshed;
-                                     memory-bank/ is left untouched.
+  - Same file schema, stale rules -> AGENTS.md / CLAUDE.md / the skill are
+                                     refreshed; memory-bank/ is left untouched.
   - File schema does NOT match    -> the old memory bank is backed up to
     (e.g. profile changed, or a      .old/memory-bank-<timestamp>/, fresh
      newer profile added files)      scaffolding is created, and you are
                                      told to ask your agent to migrate the
                                      old data into the new files.
 
-Use --force to overwrite all profile-managed files in place WITHOUT a
-backup or migration prompt (power-user escape hatch). Set AGENT_RULES_ROOT
-to override the source location:
+Set AGENT_RULES_ROOT to override the source location:
   AGENT_RULES_ROOT=/path/to/mb-agent-rules init-agent-rules general-project
 USAGE
 }
@@ -67,6 +82,23 @@ while [ "$#" -gt 0 ]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --claude-mode=*)
+      CLAUDE_MODE="${1#*=}"
+      case "$CLAUDE_MODE" in
+        import|symlink|copy) ;;
+        *) die "invalid --claude-mode: $CLAUDE_MODE (expected import, symlink, or copy)" ;;
+      esac
+      shift
+      ;;
+    --skills-dir=*)
+      SKILLS_DIR="${1#*=}"
+      [ -n "$SKILLS_DIR" ] || die "--skills-dir requires a path"
+      shift
+      ;;
+    --no-skill)
+      INSTALL_SKILL=0
       shift
       ;;
     -*)
@@ -108,11 +140,17 @@ esac
 TARGET_ROOT="$(pwd -P)"
 TEMPLATE_DIR="$AGENT_RULES_ROOT/templates/$TEMPLATE_DIR_NAME"
 INSTRUCTIONS_SRC="$AGENT_RULES_ROOT/instructions/AGENTS.${PROFILE}.md"
+SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank/SKILL.md"
+SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank/SKILL.md"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 for required in "$TEMPLATE_DIR" "$INSTRUCTIONS_SRC"; do
   [ -e "$required" ] || die "required source not found: $required"
 done
+
+if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$SKILL_SRC" ]; then
+  die "required source not found: $SKILL_SRC (use --no-skill to skip)"
+fi
 
 # Required memory-bank file names for this profile (the canonical schema).
 REQUIRED_FILES=()
@@ -128,10 +166,17 @@ run_mkdir() {
   fi
 }
 
-# Emit the exact CLAUDE.md mirror content for the current instruction source.
+# Emit the CLAUDE.md content for the current mode. Claude Code reads CLAUDE.md
+# and never AGENTS.md, so by default we point at AGENTS.md instead of copying it:
+# tools that read both files then load the instructions only once.
 expected_claude() {
-  printf '<!-- This file is identical to AGENTS.md. Edit AGENTS.md and re-run init-agent-rules to update both. -->\n\n'
-  cat "$INSTRUCTIONS_SRC"
+  if [ "$CLAUDE_MODE" = "copy" ]; then
+    printf '<!-- This file is identical to AGENTS.md. Edit AGENTS.md and re-run init-agent-rules to update both. -->\n\n'
+    cat "$INSTRUCTIONS_SRC"
+  else
+    printf '<!-- Claude Code reads CLAUDE.md, not AGENTS.md. The line below imports it so both read the same instructions. Edit AGENTS.md instead of this file. -->\n\n'
+    printf '@AGENTS.md\n'
+  fi
 }
 
 copy_file() {
@@ -177,13 +222,13 @@ copy_template_dir() {
   done < <(find "$template_dir" -type f -print0 | sort -z)
 }
 
-copy_as_claude() {
+install_claude() {
   local dest="$1"
   local existed=0
 
   run_mkdir "$(dirname "$dest")"
 
-  [ -e "$dest" ] && existed=1
+  { [ -e "$dest" ] || [ -L "$dest" ]; } && existed=1
 
   if [ "$existed" -eq 1 ] && [ "$FORCE" -ne 1 ] && [ "$ALLOW_OVERWRITE" -ne 1 ]; then
     log "skip existing: ${dest#$TARGET_ROOT/}"
@@ -191,19 +236,27 @@ copy_as_claude() {
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    if [ "$existed" -eq 1 ]; then
-      log "overwrite: ${dest#$TARGET_ROOT/} (mirror of AGENTS.md)"
-    else
-      log "copy: ${dest#$TARGET_ROOT/} (mirror of AGENTS.md)"
-    fi
+    log "write: ${dest#$TARGET_ROOT/} ($CLAUDE_MODE of AGENTS.md)"
+    return 0
+  fi
+
+  rm -f "$dest"
+  if [ "$CLAUDE_MODE" = "symlink" ]; then
+    ln -s "AGENTS.md" "$dest"
   else
     expected_claude > "$dest"
-    if [ "$existed" -eq 1 ]; then
-      log "wrote: ${dest#$TARGET_ROOT/}"
-    else
-      log "created: ${dest#$TARGET_ROOT/}"
-    fi
   fi
+
+  if [ "$existed" -eq 1 ]; then
+    log "wrote: ${dest#$TARGET_ROOT/} ($CLAUDE_MODE)"
+  else
+    log "created: ${dest#$TARGET_ROOT/} ($CLAUDE_MODE)"
+  fi
+}
+
+install_skill() {
+  [ "$INSTALL_SKILL" -eq 1 ] || return 0
+  copy_file "$SKILL_SRC" "$SKILL_DEST"
 }
 
 # Move an existing path into the backup directory, preserving its basename.
@@ -211,7 +264,7 @@ backup_one() {
   local src="$1"
   local dest_dir="$2"
 
-  [ -e "$src" ] || return 0
+  { [ -e "$src" ] || [ -L "$src" ]; } || return 0
 
   if [ "$DRY_RUN" -eq 1 ]; then
     log "back up: ${src#$TARGET_ROOT/} -> ${dest_dir#$TARGET_ROOT/}/"
@@ -239,12 +292,25 @@ structure_matches() {
   return 0
 }
 
-# Installed AGENTS.md and CLAUDE.md are byte-identical to what we would write.
+# Installed AGENTS.md, CLAUDE.md, and the skill are exactly what we would write.
 rules_match() {
   [ -f "$TARGET_ROOT/AGENTS.md" ] || return 1
-  [ -f "$TARGET_ROOT/CLAUDE.md" ] || return 1
   diff -q "$TARGET_ROOT/AGENTS.md" "$INSTRUCTIONS_SRC" >/dev/null 2>&1 || return 1
-  diff -q "$TARGET_ROOT/CLAUDE.md" <(expected_claude) >/dev/null 2>&1 || return 1
+
+  if [ "$CLAUDE_MODE" = "symlink" ]; then
+    [ -L "$TARGET_ROOT/CLAUDE.md" ] || return 1
+    [ "$(readlink "$TARGET_ROOT/CLAUDE.md")" = "AGENTS.md" ] || return 1
+  else
+    [ -f "$TARGET_ROOT/CLAUDE.md" ] || return 1
+    [ -L "$TARGET_ROOT/CLAUDE.md" ] && return 1
+    diff -q "$TARGET_ROOT/CLAUDE.md" <(expected_claude) >/dev/null 2>&1 || return 1
+  fi
+
+  if [ "$INSTALL_SKILL" -eq 1 ]; then
+    [ -f "$SKILL_DEST" ] || return 1
+    diff -q "$SKILL_DEST" "$SKILL_SRC" >/dev/null 2>&1 || return 1
+  fi
+
   return 0
 }
 
@@ -253,7 +319,8 @@ rules_match() {
 scaffold_all() {
   copy_template_dir "$TEMPLATE_DIR" "$TARGET_ROOT/memory-bank"
   copy_file "$INSTRUCTIONS_SRC" "$TARGET_ROOT/AGENTS.md"
-  copy_as_claude "$TARGET_ROOT/CLAUDE.md"
+  install_claude "$TARGET_ROOT/CLAUDE.md"
+  install_skill
 }
 
 print_migration_notice() {
@@ -299,8 +366,11 @@ if ! memory_bank_exists; then
   scaffold_all
   log ""
   log "Done. AGENTS.md and CLAUDE.md are installed with the memory-bank/ schema."
-  log "AGENTS.md is read by Cursor, GitHub Copilot, and Codex."
-  log "CLAUDE.md is read by Claude Code (and Cursor)."
+  log "AGENTS.md is read by Codex, Cursor, GitHub Copilot, and other AGENTS.md-aware agents."
+  log "CLAUDE.md is read by Claude Code; it points at AGENTS.md ($CLAUDE_MODE mode)."
+  if [ "$INSTALL_SKILL" -eq 1 ]; then
+    log "The memory-bank Agent Skill is in $SKILLS_DIR/memory-bank/ for init, migration, and audits."
+  fi
   exit 0
 fi
 
@@ -314,12 +384,13 @@ if structure_matches; then
 
   # Same file schema, but the instruction files are stale. Refresh only the
   # rules; leave the user's memory-bank/ content untouched.
-  log "Memory bank schema matches '$PROFILE', but AGENTS.md / CLAUDE.md are out of date."
+  log "Memory bank schema matches '$PROFILE', but the installed rules are out of date."
   log "Refreshing instructions only; memory-bank/ is left untouched."
   log ""
   ALLOW_OVERWRITE=1
   copy_file "$INSTRUCTIONS_SRC" "$TARGET_ROOT/AGENTS.md"
-  copy_as_claude "$TARGET_ROOT/CLAUDE.md"
+  install_claude "$TARGET_ROOT/CLAUDE.md"
+  install_skill
   ALLOW_OVERWRITE=0
   log ""
   log "Done. Instructions refreshed; no memory data was changed."
@@ -335,5 +406,7 @@ backup_one "$TARGET_ROOT/memory-bank" "$BACKUP_DIR"
 backup_one "$TARGET_ROOT/AGENTS.md" "$BACKUP_DIR"
 backup_one "$TARGET_ROOT/CLAUDE.md" "$BACKUP_DIR"
 log ""
+ALLOW_OVERWRITE=1
 scaffold_all
+ALLOW_OVERWRITE=0
 print_migration_notice "$BACKUP_DIR"

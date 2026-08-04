@@ -25,6 +25,7 @@ Use a project-local memory bank for general project work.
 - Treat `projectBrief.md` and `requirements.md` as authority for goals, constraints, non-goals, and acceptance criteria.
 - If requirements, ownership, privacy, or production-impacting behavior are unclear, stop and ask before irreversible or high-impact actions.
 - Do not store plaintext secrets, credentials, private keys, or sensitive customer/user data in memory files. Store references to secure storage locations instead.
+- The project `memory-bank` directory is the store of record. Some tools keep their own automatic memory outside the project. That memory is machine-local, tool-specific, and not shared with collaborators: never treat it as authoritative and never let it substitute for a memory bank update. Durable project facts belong in the memory bank.
 
 ### 3) Recording Rules
 

@@ -1,22 +1,24 @@
 # Memory Bank Agent Rules
 
-Memory Bank Agent Rules keeps a single, shared, project-local "memory bank" consistent across AI coding agents — **Cursor**, **GitHub Copilot**, **Codex**, and **Claude Code**.
+Memory Bank Agent Rules keeps a single, shared, project-local "memory bank" consistent across AI coding agents — **Codex**, **Cursor**, **GitHub Copilot**, **Claude Code**, and any other agent that reads `AGENTS.md`.
 
 The core model:
 
-- **One memory bank, one instruction file** — all tools read `AGENTS.md` (or `CLAUDE.md` for Claude Code) and update the same `memory-bank/` directory.
+- **One memory bank, one instruction file** — every tool reads the same `AGENTS.md` and updates the same `memory-bank/` directory. `CLAUDE.md` points at `AGENTS.md` rather than duplicating it.
 - **Three profiles** for different work types: `pentest`, `academic-research`, `general-project`. Each has its own file schema.
-- **One bootstrap command** (`bin/init-agent-rules`) copies the right templates and a universal `AGENTS.md` into the target project.
+- **One bootstrap command** (`bin/init-agent-rules`) installs the templates, `AGENTS.md`, `CLAUDE.md`, and a portable Agent Skill.
 - **Shared lifecycle**: read memory → work → update memory → report status on every response.
+- **Optional enforcement** (`bin/check-memory-freshness`) fails a commit or CI job when project files change without a memory bank update.
 
 ## Install
 
 ```bash
 mkdir -p ~/.local/bin
 ln -sf "$HOME/projects/mb-agent-rules/bin/init-agent-rules" ~/.local/bin/init-agent-rules
+ln -sf "$HOME/projects/mb-agent-rules/bin/check-memory-freshness" ~/.local/bin/check-memory-freshness
 ```
 
-A symlink is recommended so updates from `git pull` propagate automatically.
+Symlinks are recommended so updates from `git pull` propagate automatically.
 
 If this repo lives somewhere other than `$HOME/projects/mb-agent-rules`, either edit `DEFAULT_AGENT_RULES_ROOT` at the top of the script or set `AGENT_RULES_ROOT=/path/to/mb-agent-rules` when running the command.
 
@@ -32,8 +34,11 @@ This creates:
 
 ```
 your-project/
-├── AGENTS.md          # universal agent instructions (read by Cursor, Copilot, Codex)
-├── CLAUDE.md          # identical mirror (read by Claude Code)
+├── AGENTS.md          # universal agent instructions (the single source)
+├── CLAUDE.md          # one-line pointer to AGENTS.md (read by Claude Code)
+├── .agents/skills/
+│   └── memory-bank/
+│       └── SKILL.md   # portable Agent Skill: init, migrate, audit
 └── memory-bank/
     ├── projectBrief.md
     ├── requirements.md
@@ -52,8 +57,21 @@ Project type — pick exactly one:
 
 Options:
 
+- `--claude-mode=import|symlink|copy` — how `CLAUDE.md` is written. Default `import`.
+- `--skills-dir=PATH` — where to install the Agent Skill. Default `.agents/skills`.
+- `--no-skill` — skip installing the Agent Skill.
 - `--dry-run` — preview without writing.
 - `--force` — overwrite all profile-managed files in place, with no backup and no migration prompt (power-user escape hatch).
+
+### Why CLAUDE.md is not a copy
+
+Claude Code reads `CLAUDE.md` and never `AGENTS.md`, so a second file is unavoidable. It does **not** have to be a duplicate: VS Code Copilot reads *both* `AGENTS.md` and `CLAUDE.md`, so a full copy gets your instructions loaded twice on every request.
+
+| Mode | What is written | Use when |
+|---|---|---|
+| `import` (default) | A comment plus `@AGENTS.md`. Claude Code expands the import; other tools load two lines. | Almost always. |
+| `symlink` | `CLAUDE.md` → `AGENTS.md` symlink. | You want a single file on disk and are not on Windows. |
+| `copy` | Full duplicate of `AGENTS.md`. | Legacy behavior, or a tool in your stack that follows neither imports nor symlinks. |
 
 ### Re-running on an existing project
 
@@ -63,23 +81,82 @@ Options:
 |---|---|
 | Nothing exists yet | Fresh scaffolding is created. |
 | Memory bank already matches the profile | Nothing is changed. |
-| Same file schema, but `AGENTS.md`/`CLAUDE.md` are stale | Only the instruction files are refreshed; `memory-bank/` is left untouched. |
+| Same file schema, but the installed rules or skill are stale | Only `AGENTS.md`, `CLAUDE.md`, and the skill are refreshed; `memory-bank/` is left untouched. |
 | File schema does **not** match (profile changed, or a newer profile added/removed files) | The old memory bank (plus `AGENTS.md`/`CLAUDE.md`) is moved to `.old/memory-bank-<timestamp>/`, fresh scaffolding is created, and you are told to ask your agent to migrate the old data. |
 
 Migrating old data is a content-mapping task a bash script cannot do reliably, so after a schema-mismatch re-init, ask your agent, e.g.:
 
 > "Migrate my memory bank from `.old/memory-bank-<timestamp>/` into the new `memory-bank/` scaffolding. Map old content to the new files, preserve history, and mark anything superseded."
 
+If the memory-bank skill is installed, your agent already has the full migration procedure — see [The memory-bank Agent Skill](#the-memory-bank-agent-skill).
+
 ## How It Works
 
-`AGENTS.md` is the [universal standard](https://agents.md/) for AI coding agent instructions (Agentic AI Foundation, Linux Foundation). It is read natively by:
+`AGENTS.md` is the [universal standard](https://agents.md/) for AI coding agent instructions, stewarded by the Agentic AI Foundation under the Linux Foundation and read by 20+ agents. `init-agent-rules` installs it as the single source, plus a `CLAUDE.md` that points back at it.
 
-- **Cursor** — reads `AGENTS.md` and `CLAUDE.md` from project root, always applied.
-- **GitHub Copilot** — reads `AGENTS.md` as agent instructions.
-- **Codex** — reads `AGENTS.md` as its primary instruction file.
-- **Claude Code** — reads `CLAUDE.md` from project root.
+| Tool | Reads `AGENTS.md` | Reads `CLAUDE.md` | Notes |
+|---|---|---|---|
+| Codex | Yes | No | Builds an instruction chain from `~/.codex/AGENTS.md` down to the working directory. `AGENTS.override.md` wins over `AGENTS.md` in the same directory. Combined instructions are capped by `project_doc_max_bytes` (32 KiB default). |
+| Cursor | Yes, root and subdirectories | Not documented | Nested `AGENTS.md` is generally available; more specific files take precedence. |
+| GitHub Copilot (VS Code) | Yes (`chat.useAgentsMdFile`) | Yes (`chat.useClaudeMdFile`) | Reads **both**, which is why the default `CLAUDE.md` is a pointer rather than a copy. Nested `AGENTS.md` is experimental (`chat.useNestedAgentsMdFiles`). |
+| Claude Code | No | Yes | Loads `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, and `~/.claude/CLAUDE.md`. The `@AGENTS.md` import is Anthropic's documented interop pattern. |
+| Others (Gemini CLI, Amp, goose, Junie, Aider, Warp, Factory, Ona, …) | Yes | — | Some need one line of config to point at `AGENTS.md`; see [agents.md](https://agents.md/). |
 
-`init-agent-rules` copies the same instructions as both `AGENTS.md` and `CLAUDE.md` so all four tools are covered with zero configuration.
+### Monorepos
+
+Codex, Cursor, and Copilot all support `AGENTS.md` files in subdirectories, with the nearest file taking precedence. Install this project's `AGENTS.md` at the repository root and add narrower `AGENTS.md` files per package if a subproject needs extra rules. Keep one `memory-bank/` at the root so all tools share it.
+
+## The memory-bank Agent Skill
+
+[Agent Skills](https://agentskills.io/) are an open, cross-tool format: a folder with a `SKILL.md` that an agent loads **on demand** when the task matches its description. They are supported by Claude Code, GitHub Copilot / VS Code, Cursor, Codex, Gemini CLI, and many others.
+
+`init-agent-rules` installs one skill, `memory-bank`, into `.agents/skills/memory-bank/`. It keeps the heavy, occasional procedures out of always-on context:
+
+- **Initialize an existing project** — fill an empty or partial memory bank from real repository evidence.
+- **Migrate a backed-up memory bank** — map `.old/memory-bank-<timestamp>/` onto a new profile schema without losing history.
+- **Audit and repair** — check structure, freshness, accuracy, secret hygiene, and internal consistency.
+
+The division of labor:
+
+- `AGENTS.md` holds the always-on rules — what to read, the binary update rule, the response status line. It is loaded on every request, so it stays short.
+- `SKILL.md` holds the multi-step procedures. It is loaded only when relevant, so it costs nothing the rest of the time.
+
+The skill is profile-agnostic: it reads `AGENTS.md` to learn which profile is installed and which files that profile requires, so it never drifts from the profiles.
+
+Invoke it explicitly (`/memory-bank` in tools that expose skills as slash commands) or just describe the task — "audit my memory bank", "migrate the backup in .old/" — and the agent loads it.
+
+### Making the skill discoverable
+
+`.agents/skills/` is the vendor-neutral location and is scanned by VS Code / Copilot out of the box. Other tools scan their own directories. Point them at it once, per project:
+
+```bash
+# Claude Code
+mkdir -p .claude/skills && ln -s ../../.agents/skills/memory-bank .claude/skills/memory-bank
+
+# GitHub-convention location, if you prefer it
+mkdir -p .github/skills && ln -s ../../.agents/skills/memory-bank .github/skills/memory-bank
+```
+
+Or install it directly where your tool expects it:
+
+```bash
+init-agent-rules general-project --skills-dir=.claude/skills
+```
+
+Use `--no-skill` to skip it entirely; the memory bank works without it.
+
+## Built-in Agent Memory
+
+Most agents now ship their own automatic memory: Claude Code auto memory (`~/.claude/projects/<project>/memory/`, on by default), Codex local memories (`~/.codex/memories/`, opt-in), and editor-managed memory in VS Code. That memory is **machine-local, per-tool, and not shared** with collaborators or with your other tools.
+
+This project's position, stated in every profile's instructions: the project `memory-bank/` is the store of record. Built-in memory is a convenience cache; agents must not treat it as authoritative or let it substitute for a memory bank update.
+
+If you want tool memory out of the way entirely on a given project:
+
+- Claude Code — `{ "autoMemoryEnabled": false }` in `.claude/settings.json`, or `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`.
+- Codex — leave `[features] memories` off (it is off by default), or use `/memories` per chat.
+
+These are per-tool settings, so they are documented here rather than installed by `init-agent-rules`.
 
 ## Profiles
 
@@ -114,21 +191,49 @@ Memory bank: not consulted                             # only for unrelated requ
 
 This is non-negotiable. The agent must report its memory bank interaction on every single response. The full contract — including the binary update rule and a pre-send self-check — lives in each profile's `instructions/AGENTS.<profile>.md`.
 
+## Enforcing Updates
+
+Instruction files are context, not enforcement — every vendor says so. An agent can ignore the update rule. `bin/check-memory-freshness` gives you an objective check that does not depend on the agent behaving:
+
+```bash
+check-memory-freshness --staged      # staged changes (default)
+check-memory-freshness --worktree    # all uncommitted changes
+check-memory-freshness --head        # the most recent commit
+check-memory-freshness --range main..HEAD   # a commit range, for CI
+```
+
+It exits non-zero when files outside `memory-bank/` changed with no accompanying memory bank change. Wire it into a pre-commit hook:
+
+```bash
+ln -sf "$HOME/projects/mb-agent-rules/bin/check-memory-freshness" ~/.local/bin/check-memory-freshness
+printf '#!/bin/sh\nexec check-memory-freshness --staged\n' > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+Or into CI, as a step running `check-memory-freshness --range "$BASE..$HEAD"`.
+
+This is deliberately tool-agnostic: it is git plumbing, not a Claude Code hook or a Copilot setting, so it behaves identically no matter which agent did the work.
+
+It exits 0 with a notice if `memory-bank/` is not tracked by git — git cannot observe updates to an ignored directory, so there is nothing to verify.
+
 ## Switching Profiles
 
 Just re-run `init-agent-rules <new-profile>`. Because the new profile's file schema differs, the script detects the mismatch, backs up your existing memory bank to `.old/memory-bank-<timestamp>/`, and scaffolds the new profile. Then ask your agent to migrate the old data (see [Re-running on an existing project](#re-running-on-an-existing-project)).
 
 ## Migration from Previous Versions
 
-If you used an earlier version of this project that installed tool-specific files, you can safely delete:
+**From the tool-specific layout.** If you used a version that installed per-tool files, you can safely delete:
 
 - `.cursor/rules/*-memory-bank.mdc`
 - `.github/copilot-instructions.md`
 - `.github/instructions/*-memory.instructions.md`
 - `.claude/commands/`, `.claude/skills/`, `.claude/agents/`
-- `CLAUDE.md` (will be re-created by `init-agent-rules`)
 
-Then re-run `init-agent-rules <profile>` to install the simplified `AGENTS.md` + `CLAUDE.md`.
+**From the duplicated `CLAUDE.md`.** Earlier versions wrote `CLAUDE.md` as a byte-identical copy of `AGENTS.md`, which double-loads in tools that read both. Re-running `init-agent-rules <profile>` detects the stale copy and replaces it with the default import form; `memory-bank/` is not touched.
+
+**Legacy template alias.** `templates/memory-bank/` (an alias for the pentest templates) has been removed. Use the profile name.
+
+In all cases, re-run `init-agent-rules <profile>` to bring a project up to date.
 
 ---
 

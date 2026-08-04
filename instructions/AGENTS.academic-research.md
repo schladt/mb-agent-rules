@@ -29,6 +29,7 @@ Use a project-local memory bank for academic research work.
 - Clearly distinguish hypotheses, notes, verified claims, and source-backed conclusions.
 - Do not store sensitive participant data, private datasets, credentials, or restricted full-text materials in memory files. Store references to secure storage locations instead.
 - Use citation keys or links for sources; include uncertainty when metadata is incomplete.
+- The project `memory-bank` directory is the store of record. Some tools keep their own automatic memory outside the project. That memory is machine-local, tool-specific, and not shared with collaborators: never treat it as authoritative and never let it substitute for a memory bank update. Durable research facts belong in the memory bank.
 
 ### 3) Recording Rules
 

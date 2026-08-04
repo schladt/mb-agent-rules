@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Verify that changes to project files are accompanied by memory bank updates.
+#
+# Exit 0 if the checked change set is clean or includes a memory-bank/ update,
+# 1 if project files changed without one, 2 on usage/environment errors.
+set -euo pipefail
+
+MODE="staged"
+RANGE=""
+QUIET=0
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  check-memory-freshness [--staged | --worktree | --head | --range <A>..<B>] [--quiet]
+
+Checks a set of changed files and fails if any file outside memory-bank/ changed
+without a corresponding change inside memory-bank/.
+
+Modes:
+  --staged            staged changes (default; use as a pre-commit hook)
+  --worktree          all uncommitted changes, staged or not
+  --head              the most recent commit
+  --range <A>..<B>    an explicit commit range (use in CI)
+
+Options:
+  --quiet             suppress output; report only via exit code
+
+Exit codes:
+  0  clean, memory bank was updated alongside the project changes, or the
+     memory bank is not tracked by git (nothing to verify)
+  1  project files changed with no memory bank update
+  2  usage or environment error
+
+Install as a pre-commit hook:
+  printf '#!/bin/sh\nexec check-memory-freshness --staged\n' > .git/hooks/pre-commit
+  chmod +x .git/hooks/pre-commit
+USAGE
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 2
+}
+
+say() {
+  [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --staged|--worktree|--head)
+      MODE="${1#--}"
+      shift
+      ;;
+    --range)
+      [ "$#" -ge 2 ] || die "--range requires an argument"
+      MODE="range"
+      RANGE="$2"
+      shift 2
+      ;;
+    --quiet)
+      QUIET=1
+      shift
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+command -v git >/dev/null 2>&1 || die "git is required"
+git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# If the memory bank is not tracked by git (deliberately gitignored, or simply
+# never committed), git cannot observe updates to it and every check would fail.
+if [ -d "$REPO_ROOT/memory-bank" ] && [ -z "$(git -C "$REPO_ROOT" ls-files memory-bank)" ]; then
+  say "memory-bank/ is not tracked by git; nothing to verify. Skipping."
+  exit 0
+fi
+
+changed_files() {
+  case "$MODE" in
+    staged)
+      git diff --cached --name-only --diff-filter=ACMRD
+      ;;
+    worktree)
+      git diff HEAD --name-only --diff-filter=ACMRD
+      git ls-files --others --exclude-standard
+      ;;
+    head)
+      git show --pretty=format: --name-only --diff-filter=ACMRD HEAD
+      ;;
+    range)
+      git diff --name-only --diff-filter=ACMRD "$RANGE"
+      ;;
+  esac
+}
+
+CHANGED="$(changed_files | grep -v '^$' | sort -u || true)"
+
+if [ -z "$CHANGED" ]; then
+  say "No changes to check."
+  exit 0
+fi
+
+# Paths that never oblige a memory bank update: the bank itself and backups of it.
+MEMORY_CHANGES="$(printf '%s\n' "$CHANGED" | grep -E '^memory-bank/' || true)"
+PROJECT_CHANGES="$(printf '%s\n' "$CHANGED" | grep -Ev '^(memory-bank/|\.old/)' || true)"
+
+if [ -z "$PROJECT_CHANGES" ]; then
+  say "No project files changed outside memory-bank/. OK."
+  exit 0
+fi
+
+if [ -n "$MEMORY_CHANGES" ]; then
+  say "OK: $(printf '%s\n' "$PROJECT_CHANGES" | grep -c .) project file(s) changed, memory bank updated."
+  exit 0
+fi
+
+if [ "$QUIET" -ne 1 ]; then
+  printf 'MEMORY BANK NOT UPDATED\n'
+  printf 'These files changed with no accompanying memory-bank/ update:\n'
+  printf '  %s\n' $PROJECT_CHANGES
+  printf '\nUpdate at least activeContext and progress for your profile, then retry.\n'
+fi
+exit 1
