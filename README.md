@@ -127,7 +127,9 @@ Invoke it explicitly (`/memory-bank` in tools that expose skills as slash comman
 
 ### Making the skill discoverable
 
-`.agents/skills/` is the vendor-neutral location and is scanned by VS Code / Copilot out of the box. Other tools scan their own directories. Point them at it once, per project:
+`.agents/skills/` is the vendor-neutral location and is scanned by VS Code / Copilot out of the box. Claude Code is different: it loads skills only from the project's `.claude/skills/`, `~/.claude/skills/`, plugins, and enterprise-managed settings — so a skill in `.agents/skills/` is invisible to it, silently.
+
+`init-agent-rules` detects Claude Code and prints the exact symlink command at the end of a run. Anthropic's docs support symlinked skill directories, so this is the intended pattern rather than a workaround:
 
 ```bash
 # Claude Code
@@ -136,6 +138,8 @@ mkdir -p .claude/skills && ln -s ../../.agents/skills/memory-bank .claude/skills
 # GitHub-convention location, if you prefer it
 mkdir -p .github/skills && ln -s ../../.agents/skills/memory-bank .github/skills/memory-bank
 ```
+
+Restart Claude Code afterward if a session is already open — it watches skill directories for changes, but only ones that existed at startup.
 
 Or install it directly where your tool expects it:
 

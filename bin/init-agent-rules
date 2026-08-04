@@ -346,6 +346,44 @@ print_migration_notice() {
   log "========================================================================"
 }
 
+# Claude Code loads skills only from .claude/skills/ (plus ~/.claude/skills and
+# plugins), so a skill in .agents/skills/ is silently invisible to it.
+claude_code_present() {
+  [ -d "$TARGET_ROOT/.claude" ] && return 0
+  [ -d "$HOME/.claude" ] && return 0
+  [ -n "${CLAUDECODE:-}" ] && return 0
+  command -v claude >/dev/null 2>&1 && return 0
+  return 1
+}
+
+print_skill_advisory() {
+  [ "$INSTALL_SKILL" -eq 1 ] || return 0
+
+  log ""
+  log "Agent Skill installed to $SKILLS_DIR/memory-bank/"
+
+  case "$SKILLS_DIR" in
+    .claude/skills|.claude/skills/)
+      log "  Claude Code reads this location directly."
+      return 0
+      ;;
+  esac
+
+  log "  Read directly by VS Code / GitHub Copilot, which scans .agents/skills/."
+
+  if claude_code_present; then
+    log ""
+    log "  Claude Code detected. It only scans .claude/skills/, so link it there:"
+    log ""
+    log "      mkdir -p .claude/skills && \\"
+    log "        ln -s ../../$SKILLS_DIR/memory-bank .claude/skills/memory-bank"
+    log ""
+    log "  Restart Claude Code afterward if a session is already open."
+  else
+    log "  For tools that scan elsewhere, symlink or re-run with --skills-dir=PATH."
+  fi
+}
+
 # --- Main ------------------------------------------------------------------
 
 log "Initializing agent rules in: $TARGET_ROOT"
@@ -358,6 +396,7 @@ if [ "$FORCE" -eq 1 ]; then
   scaffold_all
   log ""
   log "Done. AGENTS.md and CLAUDE.md are installed with the memory-bank/ schema."
+  print_skill_advisory
   exit 0
 fi
 
@@ -368,9 +407,7 @@ if ! memory_bank_exists; then
   log "Done. AGENTS.md and CLAUDE.md are installed with the memory-bank/ schema."
   log "AGENTS.md is read by Codex, Cursor, GitHub Copilot, and other AGENTS.md-aware agents."
   log "CLAUDE.md is read by Claude Code; it points at AGENTS.md ($CLAUDE_MODE mode)."
-  if [ "$INSTALL_SKILL" -eq 1 ]; then
-    log "The memory-bank Agent Skill is in $SKILLS_DIR/memory-bank/ for init, migration, and audits."
-  fi
+  print_skill_advisory
   exit 0
 fi
 
@@ -394,6 +431,7 @@ if structure_matches; then
   ALLOW_OVERWRITE=0
   log ""
   log "Done. Instructions refreshed; no memory data was changed."
+  print_skill_advisory
   exit 0
 fi
 
@@ -410,3 +448,4 @@ ALLOW_OVERWRITE=1
 scaffold_all
 ALLOW_OVERWRITE=0
 print_migration_notice "$BACKUP_DIR"
+print_skill_advisory
