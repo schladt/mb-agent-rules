@@ -33,6 +33,7 @@ Run this command from the root of the target project. It initializes:
   AGENTS.md                       universal agent instructions
   CLAUDE.md                       pointer to AGENTS.md (for Claude Code)
   .agents/skills/memory-bank/     portable Agent Skill for memory bank work
+  .agents/skills/evidence-review/ IR analysis skill (incident-response only)
 
 Options:
   --claude-mode=MODE  how CLAUDE.md is written (default: import)
@@ -148,6 +149,8 @@ TEMPLATE_DIR="$AGENT_RULES_ROOT/templates/$TEMPLATE_DIR_NAME"
 INSTRUCTIONS_SRC="$AGENT_RULES_ROOT/instructions/AGENTS.${PROFILE}.md"
 SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank/SKILL.md"
 SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank/SKILL.md"
+EVIDENCE_REVIEW_SKILL_SRC="$AGENT_RULES_ROOT/skills/evidence-review/SKILL.md"
+EVIDENCE_REVIEW_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/evidence-review/SKILL.md"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 for required in "$TEMPLATE_DIR" "$INSTRUCTIONS_SRC"; do
@@ -156,6 +159,10 @@ done
 
 if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$SKILL_SRC" ]; then
   die "required source not found: $SKILL_SRC (use --no-skill to skip)"
+fi
+
+if [ "$INSTALL_SKILL" -eq 1 ] && [ "$PROFILE" = "incident-response" ] && [ ! -f "$EVIDENCE_REVIEW_SKILL_SRC" ]; then
+  die "required source not found: $EVIDENCE_REVIEW_SKILL_SRC (use --no-skill to skip)"
 fi
 
 # Required memory-bank file names for this profile (the canonical schema).
@@ -263,6 +270,9 @@ install_claude() {
 install_skill() {
   [ "$INSTALL_SKILL" -eq 1 ] || return 0
   copy_file "$SKILL_SRC" "$SKILL_DEST"
+  if [ "$PROFILE" = "incident-response" ]; then
+    copy_file "$EVIDENCE_REVIEW_SKILL_SRC" "$EVIDENCE_REVIEW_SKILL_DEST"
+  fi
 }
 
 # Move an existing path into the backup directory, preserving its basename.
@@ -315,6 +325,10 @@ rules_match() {
   if [ "$INSTALL_SKILL" -eq 1 ]; then
     [ -f "$SKILL_DEST" ] || return 1
     diff -q "$SKILL_DEST" "$SKILL_SRC" >/dev/null 2>&1 || return 1
+    if [ "$PROFILE" = "incident-response" ]; then
+      [ -f "$EVIDENCE_REVIEW_SKILL_DEST" ] || return 1
+      diff -q "$EVIDENCE_REVIEW_SKILL_DEST" "$EVIDENCE_REVIEW_SKILL_SRC" >/dev/null 2>&1 || return 1
+    fi
   fi
 
   return 0
@@ -367,6 +381,9 @@ print_skill_advisory() {
 
   log ""
   log "Agent Skill installed to $SKILLS_DIR/memory-bank/"
+  if [ "$PROFILE" = "incident-response" ]; then
+    log "IR analysis skill installed to $SKILLS_DIR/evidence-review/"
+  fi
 
   case "$SKILLS_DIR" in
     .claude/skills|.claude/skills/)
@@ -383,6 +400,9 @@ print_skill_advisory() {
     log ""
     log "      mkdir -p .claude/skills && \\"
     log "        ln -s ../../$SKILLS_DIR/memory-bank .claude/skills/memory-bank"
+    if [ "$PROFILE" = "incident-response" ]; then
+      log "      ln -s ../../$SKILLS_DIR/evidence-review .claude/skills/evidence-review"
+    fi
     log ""
     log "  Restart Claude Code afterward if a session is already open."
   else
