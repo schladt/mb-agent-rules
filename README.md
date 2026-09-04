@@ -163,7 +163,7 @@ scope or consent conflicts, and version-control mismatches.
 
 ### Monorepos
 
-Codex, Cursor, and Copilot all support `AGENTS.md` files in subdirectories, with the nearest file taking precedence. Install this project's `AGENTS.md` at the repository root and add narrower `AGENTS.md` files per package if a subproject needs extra rules. Keep one `memory-bank/` at the root so all tools share it.
+Codex, Cursor, and the Copilot cloud agent support `AGENTS.md` files in subdirectories, with the nearest file taking precedence. VS Code can also discover nested `AGENTS.md` files, but that support is experimental: it adds their paths to chat context and lets the agent decide which instructions apply. Install this project's `AGENTS.md` at the repository root and add narrower `AGENTS.md` files per package if a subproject needs extra rules. Keep one `memory-bank/` at the root so all tools share it.
 
 ## Memory Bank Agent Skills
 
@@ -202,7 +202,7 @@ the backup in `.old/`.”
 
 ### Making the skills discoverable
 
-`.agents/skills/` is the vendor-neutral location and is scanned by VS Code / Copilot out of the box. Claude Code is different: it loads skills only from the project's `.claude/skills/`, `~/.claude/skills/`, plugins, and enterprise-managed settings — so a skill in `.agents/skills/` is invisible to it, silently.
+`.agents/skills/` is the vendor-neutral location and is scanned natively by Codex, Cursor, Gemini CLI, and GitHub Copilot in VS Code, CLI, cloud-agent, and code-review workflows. Claude Code is different: it loads skills only from the project's `.claude/skills/`, `~/.claude/skills/`, plugins, enterprise-managed settings, and account-synced skills — so a skill only in `.agents/skills/` is invisible to it.
 
 `init-agent-rules` detects Claude Code and prints the exact symlink command at the end of a run. Anthropic's docs support symlinked skill directories, so this is the intended pattern rather than a workaround:
 
@@ -219,6 +219,11 @@ mkdir -p .github/skills && ln -s ../../.agents/skills/memory-bank-maintenance .g
 ```
 
 Restart Claude Code afterward if a session is already open — it watches skill directories for changes, but only ones that existed at startup.
+
+Claude Code cloud sessions do not inherit local-only symlinks or
+`~/.claude/skills/`. For cloud use, commit the project skill under
+`.claude/skills/`, declare it through a repository plugin, or enable it as an
+account-synced skill.
 
 Or install it directly where your tool expects it:
 

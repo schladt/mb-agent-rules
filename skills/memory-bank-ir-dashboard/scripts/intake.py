@@ -473,6 +473,7 @@ def ingest_files(
         next_art_num = int(next_artifact_id(index_content).split("-")[1])
         reserved: set[str] = set()
         prepared: list[dict] = []
+        queue_id: str | None = None
         results: list[dict] = []
         _, file_mode = _modes()
 
@@ -523,6 +524,8 @@ def ingest_files(
             if dry_run:
                 results.append(_public_result(item, dry_run=True, verified=True))
                 continue
+            if queue_id is None:
+                queue_id = next_queue_id(queue_content)
 
             pending_path = ARTIFACTS_DIR / f".pending-{uuid.uuid4().hex}"
             try:
@@ -557,7 +560,8 @@ def ingest_files(
         if dry_run or not prepared:
             return results
 
-        queue_id = next_queue_id(queue_content)
+        if queue_id is None:
+            raise RuntimeError("Review queue ID was not reserved")
         transaction_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         journal = {
             "schema_version": 1,

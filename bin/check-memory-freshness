@@ -127,7 +127,7 @@ fi
 if [ "$QUIET" -ne 1 ]; then
   printf 'MEMORY BANK NOT UPDATED\n'
   printf 'These files changed with no accompanying memory-bank/ update:\n'
-  printf '  %s\n' $PROJECT_CHANGES
+  printf '%s\n' "$PROJECT_CHANGES" | sed 's/^/  /'
   printf '\nUpdate at least activeContext and progress for your profile, then retry.\n'
 fi
 exit 1

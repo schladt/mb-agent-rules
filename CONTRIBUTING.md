@@ -25,11 +25,13 @@ mb-agent-rules/
 │       ├── dashboard/                   # local Flask application
 │       ├── scripts/                     # intake and semantic validator
 │       └── sample-data/                 # fictional event data
-└── instructions/
-    ├── AGENTS.pentest.md
-    ├── AGENTS.academic-research.md
-    ├── AGENTS.general-project.md
-    └── AGENTS.incident-response.md
+├── instructions/
+│   ├── AGENTS.pentest.md
+│   ├── AGENTS.academic-research.md
+│   ├── AGENTS.general-project.md
+│   └── AGENTS.incident-response.md
+└── tests/
+    └── test_ir_tools.py                      # IR validator/intake regressions
 ```
 
 ## Design Principles
@@ -203,6 +205,7 @@ When changing the required-file list or the workflow for a profile:
 Run focused checks appropriate to the files you changed. At minimum:
 
 ```bash
+python3 -m unittest discover -s tests -v
 bin/check-profile-drift
 bash -n bin/init-agent-rules skills/memory-bank-ir-dashboard/setup.sh \
   skills/memory-bank-ir-dashboard/dashboard/start.sh

@@ -16,6 +16,7 @@ MEMORY_BANK = PROJECT_ROOT / "memory-bank"
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 INCOMING_DIR = PROJECT_ROOT / "incoming"
 CONFIG_FILE = PROJECT_ROOT / "dashboard.config.json"
+SENSITIVE_DIR = PROJECT_ROOT / "sensitive"
 CUSTODY_MANIFEST = ARTIFACTS_DIR / ".custody-manifest.jsonl"
 
 REQUIRED_SECTIONS = {
@@ -24,6 +25,10 @@ REQUIRED_SECTIONS = {
         "Engagement Authorization Reference", "In-Scope Systems / Environments",
         "Out-of-Scope Systems / Environments", "Response Approval Authority",
         "Evidence Preservation Requirements", "Prohibited Actions", "Escalation Contacts",
+    ],
+    "sensitiveDataPolicy.md": [
+        "Policy Status", "Standard Store", "Profile Stores",
+        "Additional Owner-Designated Stores", "Handling Rules", "Notes",
     ],
     "timeline.md": ["Clock Skew and Timezone Notes", "Entries"],
     "affectedAssets.md": ["Systems", "Accounts", "Data", "Scope Change Log"],
@@ -89,6 +94,46 @@ def _has_meaningful_value(value: str) -> bool:
     return bool(value and not re.fullmatch(r"(?:pending|unknown|tbd|n/?a)(?:\s*[—:.-].*)?", value.lower()))
 
 
+def _policy_fields(section: str) -> dict[str, str]:
+    fields = {}
+    for line in section.splitlines():
+        match = re.match(r"^[-*]\s+([^:]+):\s*(.*?)\s*$", line.strip())
+        if match:
+            fields[match.group(1).strip()] = match.group(2).strip().strip("`")
+    return fields
+
+
+def check_sensitive_policy() -> list[dict]:
+    path = MEMORY_BANK / "sensitiveDataPolicy.md"
+    if not path.exists():
+        return []
+    try:
+        sections = _sections(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        return []
+    status = _policy_fields(sections.get("Policy Status", ""))
+    issues = []
+    for field in ("Mode", "Approved by", "Version-control policy", "Memory-bank plaintext"):
+        if not status.get(field):
+            issues.append(issue("error", "sensitive-policy", f"sensitiveDataPolicy.md: missing policy value: {field}"))
+    mode = status.get("Mode")
+    version_control = status.get("Version-control policy")
+    plaintext = status.get("Memory-bank plaintext")
+    if mode and mode not in {"restricted", "designated-store", "private-lab"}:
+        issues.append(issue("error", "sensitive-policy", f"sensitiveDataPolicy.md: unsupported mode: {mode}"))
+    if version_control and version_control not in {"excluded", "permitted", "external"}:
+        issues.append(issue("error", "sensitive-policy", f"sensitiveDataPolicy.md: unsupported version-control policy: {version_control}"))
+    if plaintext and plaintext not in {"prohibited", "synthetic-only"}:
+        issues.append(issue("error", "sensitive-policy", f"sensitiveDataPolicy.md: unsupported memory-bank plaintext policy: {plaintext}"))
+    if plaintext == "synthetic-only" and mode != "private-lab":
+        issues.append(issue("error", "sensitive-policy", "sensitiveDataPolicy.md: synthetic-only plaintext requires private-lab mode"))
+    if "`sensitive/`" not in sections.get("Standard Store", ""):
+        issues.append(issue("error", "sensitive-policy", "sensitiveDataPolicy.md: standard sensitive/ store is not declared"))
+    if "`artifacts/`" not in sections.get("Profile Stores", ""):
+        issues.append(issue("error", "sensitive-policy", "sensitiveDataPolicy.md: incident-response artifacts/ store is not declared"))
+    return issues
+
+
 def check_memory_bank_semantics() -> list[dict]:
     issues = []
     for filename, required in REQUIRED_SECTIONS.items():
@@ -109,6 +154,7 @@ def check_memory_bank_semantics() -> list[dict]:
             if heading in sections and not _has_meaningful_value(sections[heading]):
                 severity = "error" if filename == "scopeAuthorization.md" else "warning"
                 issues.append(issue(severity, "readiness", f"{filename}: required operational value is not populated: {heading}"))
+    issues.extend(check_sensitive_policy())
     return issues
 
 
@@ -307,16 +353,30 @@ def check_permissions() -> list[dict]:
     shared = False
     try:
         config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"), parse_constant=_reject_nonfinite_json)
-        shared = config.get("shared_group_access", False) is True
-    except (OSError, ValueError, AttributeError):
-        pass
-    forbidden = 0o007 if shared else 0o077
-    policy = "world permissions" if shared else "group/world permissions"
-    for directory in (INCOMING_DIR, ARTIFACTS_DIR):
+    except (OSError, ValueError) as exc:
+        issues.append(issue("error", "configuration", f"dashboard.config.json is missing or invalid: {exc}"))
+        config = {}
+    if not isinstance(config, dict):
+        issues.append(issue("error", "configuration", "dashboard.config.json must contain an object"))
+        config = {}
+    shared_value = config.get("shared_group_access", False)
+    if not isinstance(shared_value, bool):
+        issues.append(issue("error", "configuration", "dashboard.config.json shared_group_access must be a boolean"))
+    else:
+        shared = shared_value
+
+    evidence_forbidden = 0o007 if shared else 0o077
+    directories = (
+        (INCOMING_DIR, evidence_forbidden, "world permissions" if shared else "group/world permissions"),
+        (ARTIFACTS_DIR, evidence_forbidden, "world permissions" if shared else "group/world permissions"),
+        (SENSITIVE_DIR, 0o077, "group/world permissions"),
+    )
+    for directory, forbidden, policy in directories:
         if directory.is_symlink():
             issues.append(issue("error", "permissions", f"Sensitive directory must not be a symlink: {directory.name}/"))
             continue
         if not directory.exists():
+            issues.append(issue("warning", "permissions", f"Sensitive store not present: {directory.name}/ (nothing to verify; create it before storing evidence)"))
             continue
         mode = directory.stat().st_mode & 0o777
         if mode & forbidden:
