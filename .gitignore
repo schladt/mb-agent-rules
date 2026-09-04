@@ -1,4 +1,4 @@
-# Ignore agent artifacts at the repo root only.
+# Ignore agent and sensitive-data artifacts at the repo root only.
 # These are deliberately anchored with a leading slash so the source folders
 # (e.g. skills/, templates/) are not matched.
 /memory-bank/
@@ -7,3 +7,4 @@
 /.agents/
 /.old/
 /.claude/
+/sensitive/

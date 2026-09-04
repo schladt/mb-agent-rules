@@ -38,6 +38,13 @@ mb-agent-rules/
 - No tool-specific features. No `.mdc` frontmatter, no Copilot `applyTo`, no per-tool hooks or subagents. If a feature only works in one tool, it does not belong here. Cross-tool open formats — `AGENTS.md` and Agent Skills (`SKILL.md`) — are in scope.
 - Always-on context stays small: rules that must apply on every request live in the instruction files; multi-step procedures live in skills.
 - The instruction file and the template directory must agree on required `memory-bank/*.md` files. Drift breaks the guarantee.
+- Every profile includes `sensitiveDataPolicy.md`; its instruction reference and
+  template file must remain covered by the profile drift check.
+- `sensitive/` is the common operational store. Pentest additionally receives
+  `evidence/` and `loot/`; incident response additionally receives `artifacts/`.
+- Sensitive stores default to `0700`, new files to `0600`, and version-control
+  exclusion. Explicit policy may permit version control or synthetic lab values,
+  but repository visibility never selects that policy automatically.
 - The `memory-bank-maintenance` skill stays profile-agnostic. It reads
   `AGENTS.md` for the required file list, so it never needs to change when a
   profile does.
@@ -65,6 +72,35 @@ This repo dogfoods the `general-project` profile, but its own agent artifacts ar
 ```
 
 The unanchored source directories (`templates/`, `skills/`, `instructions/`) are the shipped artifacts and *are* committed. When adding anything that `init-agent-rules` writes into a target project, check whether it also needs an anchored `.gitignore` entry here.
+
+## Modifying Sensitive-Data Handling
+
+Keep these invariants synchronized across all profile instructions, all four
+`sensitiveDataPolicy.md` templates, `bin/init-agent-rules`, and README:
+
+- `sensitiveDataPolicy.md` contains classifications, paths, approval, and
+  version-control treatment; it never contains live secret values.
+- `sensitive/` is authorized for operational inputs in every profile.
+- Pentest `evidence/` supports findings and `loot/` holds authorized
+  target-derived material.
+- Incident-response `artifacts/` holds acquired evidence under chain of custody;
+  responder credentials remain in `sensitive/`.
+- `restricted`, `designated-store`, and `private-lab` are the only modes.
+- Live production secrets stay reference-only in memory files.
+  `Memory-bank plaintext: synthetic-only` requires explicit `private-lab`
+  selection.
+- A completed additional-store row is explicit authorization for its stated
+  path and data classes. Directory existence alone is not authorization.
+- Default store directories are created with mode `0700` and ignored by
+  version control. Agents use `0600` for new files where POSIX permissions are
+  available.
+- Compliant writes do not trigger repetitive warnings. Missing policy,
+  undeclared data, scope or consent conflicts, unsafe permissions, and
+  version-control mismatches do.
+
+Adding or removing a profile store requires coordinated updates to
+`SENSITIVE_STORE_DIRS` in `bin/init-agent-rules`, that profile's instruction
+file, its policy template, README, and the focused installer smoke tests.
 
 ## Drift Check
 

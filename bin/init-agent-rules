@@ -30,6 +30,9 @@ Aliases:
 
 Run this command from the root of the target project. It initializes:
   memory-bank/                    from the selected project type template
+  sensitive/                      private operational data (all profiles)
+  evidence/ and loot/             pentest-only sensitive stores
+  artifacts/                      incident-response evidence store
   AGENTS.md                       universal agent instructions
   CLAUDE.md                       pointer to AGENTS.md (for Claude Code)
   .agents/skills/memory-bank-maintenance/
@@ -159,6 +162,16 @@ IR_EVIDENCE_REVIEW_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-ir-evidence-r
 IR_EVIDENCE_REVIEW_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-ir-evidence-review/SKILL.md"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
+SENSITIVE_STORE_DIRS=("sensitive")
+case "$PROFILE" in
+  pentest)
+    SENSITIVE_STORE_DIRS+=("evidence" "loot")
+    ;;
+  incident-response)
+    SENSITIVE_STORE_DIRS+=("artifacts")
+    ;;
+esac
+
 for required in "$TEMPLATE_DIR" "$INSTRUCTIONS_SRC"; do
   [ -e "$required" ] || die "required source not found: $required"
 done
@@ -276,6 +289,50 @@ install_claude() {
   fi
 }
 
+install_sensitive_stores() {
+  local store dest entry gitignore="$TARGET_ROOT/.gitignore"
+  local missing_ignores=()
+
+  for store in "${SENSITIVE_STORE_DIRS[@]}"; do
+    dest="$TARGET_ROOT/$store"
+    if [ -L "$dest" ] || { [ -e "$dest" ] && [ ! -d "$dest" ]; }; then
+      die "sensitive store path is not a real directory: ${dest#$TARGET_ROOT/}"
+    fi
+
+    if [ ! -d "$dest" ]; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        log "mkdir -m 0700 ${dest#$TARGET_ROOT/}"
+      else
+        mkdir -p "$dest"
+        chmod 0700 "$dest"
+        log "created private store: ${dest#$TARGET_ROOT/}"
+      fi
+    fi
+
+    entry="$store/"
+    if [ ! -f "$gitignore" ] || ! grep -qxF "$entry" "$gitignore"; then
+      missing_ignores+=("$entry")
+    fi
+  done
+
+  [ "${#missing_ignores[@]}" -gt 0 ] || return 0
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    for entry in "${missing_ignores[@]}"; do
+      log "append .gitignore: $entry"
+    done
+    return 0
+  fi
+
+  if [ -s "$gitignore" ]; then
+    printf '\n' >> "$gitignore"
+  fi
+  for entry in "${missing_ignores[@]}"; do
+    printf '%s\n' "$entry" >> "$gitignore"
+  done
+  log "updated: .gitignore (sensitive stores excluded by default)"
+}
+
 remove_legacy_skill() {
   local name="$1"
   local dest="$TARGET_ROOT/$SKILLS_DIR/$name"
@@ -381,6 +438,7 @@ scaffold_all() {
   copy_template_dir "$TEMPLATE_DIR" "$TARGET_ROOT/memory-bank"
   copy_file "$INSTRUCTIONS_SRC" "$TARGET_ROOT/AGENTS.md"
   install_claude "$TARGET_ROOT/CLAUDE.md"
+  install_sensitive_stores
   install_skill
 }
 

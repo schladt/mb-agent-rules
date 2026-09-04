@@ -13,6 +13,7 @@ Use a project-local memory bank for general project work.
 - Ensure these files exist (create if missing):
   - `memory-bank/projectBrief.md`
   - `memory-bank/requirements.md`
+  - `memory-bank/sensitiveDataPolicy.md`
   - `memory-bank/decisions.md`
   - `memory-bank/activeContext.md`
   - `memory-bank/progress.md`
@@ -22,11 +23,13 @@ Use a project-local memory bank for general project work.
 
 ### 2) Authority and Safety Gates
 
-- Treat `projectBrief.md` and `requirements.md` as authority for goals, constraints, non-goals, and acceptance criteria.
+- Treat `projectBrief.md`, `requirements.md`, and `sensitiveDataPolicy.md` as authority for goals, constraints, acceptance criteria, and sensitive-data handling.
 - If requirements, ownership, privacy, or production-impacting behavior are unclear, stop and ask before irreversible or high-impact actions.
-- Do not store plaintext secrets, credentials, private keys, or sensitive customer/user data in memory files. Store references to secure storage locations instead.
-- Sensitive data may be written to a store the project owner explicitly designated for it, such as a directory they created or asked you to create for that purpose. Do not invent such a store on your own initiative, and do not repurpose an existing directory as one.
-- When you write sensitive data to that store, say so in your response: name the path, say what class of data it now holds, and confirm it is excluded from version control — or flag it clearly if it is not. Memory files record the reference, never the data.
+- Read `sensitiveDataPolicy.md` before writing credentials, private keys, tokens, restricted datasets, or other sensitive material. It defines the active mode, authorized data classes, storage paths, and version-control policy.
+- Selecting this profile designates `sensitive/` as the standard store for authorized operational secrets and restricted inputs. Additional paths are authorized only when the owner records them in `sensitiveDataPolicy.md`; directory existence alone is not authorization.
+- Memory files reference sensitive material rather than reproducing it. Synthetic values may appear there only when the policy explicitly sets `private-lab` mode and `Memory-bank plaintext: synthetic-only`; live production secrets remain prohibited.
+- A compliant write to a declared store needs no repeated warning. Report and stop for missing or ambiguous policy, an undeclared path or data class, a version-control conflict, unsafe permissions, or another policy violation. Repository visibility never implies `private-lab`.
+- New sensitive-store directories use mode `0700` and newly written files use mode `0600` where POSIX permissions are supported.
 - The project `memory-bank` directory is the store of record. Some tools keep their own automatic memory outside the project. That memory is machine-local, tool-specific, and not shared with collaborators: never treat it as authoritative and never let it substitute for a memory bank update. Durable project facts belong in the memory bank.
 
 ### 3) Recording Rules

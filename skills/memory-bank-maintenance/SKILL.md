@@ -60,11 +60,13 @@ Use when the memory bank may have fallen out of sync with the repository.
    recent commit history. Flag project changes that were never recorded.
 3. Verify accuracy: check the authority files against the current repository.
    Statements that are no longer true get marked superseded, not deleted.
-4. Verify hygiene: no secrets, credentials, private keys, payloads, or personal
-   or restricted data in the memory files. Replace any found with a reference to
-   a secure location and tell the user what was removed. A separate store the
-   owner designated for sensitive data is out of scope for this audit — check
-   only that the memory files reference it rather than reproduce its contents.
+4. Verify hygiene against `sensitiveDataPolicy.md`: live secrets, credentials,
+   private keys, payloads, personal data, and restricted data stay out of memory
+   files. Synthetic values are allowed only when the policy explicitly selects
+   `private-lab` and `Memory-bank plaintext: synthetic-only`. Replace violations
+   with a reference to an authorized store and report the repair. Do not inspect
+   or reproduce the contents of a declared sensitive-data store during a
+   memory-bank audit.
 5. Verify consistency: resolve entries that contradict each other, keeping the
    newer one and marking the older superseded.
 6. Report findings and the repairs made. Record the audit in the progress file.
@@ -79,10 +81,10 @@ It is advisory tooling; it does not replace reading the files.
 
 - Markdown only. No tool-specific syntax in any memory file.
 - Append-only. Historical notes are never deleted, only marked superseded.
-- Never write secrets, credentials, payloads, or restricted data to a memory
-  file. They may go to a store the project owner explicitly designated for
-  sensitive data; warn in your response when they do, and keep the memory file
-  reference-only.
+- Follow `sensitiveDataPolicy.md` for sensitive-data classes, authorized paths,
+  memory-bank plaintext, and version-control treatment. Live production secrets
+  remain reference-only in memory files. A compliant write to a declared store
+  needs no repeated warning; report policy conflicts or violations.
 - The memory bank is the store of record. Do not rely on a tool's own automatic
   memory to carry project facts; it is machine-local and not shared.
 - Finish with the response status line required by `AGENTS.md`.
