@@ -33,6 +33,8 @@ Run this command from the root of the target project. It initializes:
   AGENTS.md                       universal agent instructions
   CLAUDE.md                       pointer to AGENTS.md (for Claude Code)
   .agents/skills/memory-bank/     portable Agent Skill for memory bank work
+  .agents/skills/memory-bank-read-only/
+                                   read-only context-loading Agent Skill
   .agents/skills/evidence-review/ IR analysis skill (incident-response only)
 
 Options:
@@ -42,8 +44,8 @@ Options:
                         symlink CLAUDE.md -> AGENTS.md symlink
                         copy    full duplicate of AGENTS.md (legacy; causes
                                 double-loading in tools that read both files)
-  --skills-dir=PATH   where to install the Agent Skill (default: .agents/skills)
-  --no-skill          do not install the Agent Skill
+  --skills-dir=PATH   where to install Agent Skills (default: .agents/skills)
+  --no-skill          do not install Agent Skills
   --dry-run           preview without writing
   --force             overwrite all profile-managed files in place, with no
                       backup and no migration prompt (power-user escape hatch)
@@ -51,7 +53,7 @@ Options:
 Existing installs are detected:
   - Nothing exists yet            -> fresh scaffolding is created.
   - Memory bank matches profile   -> nothing is changed.
-  - Same file schema, stale rules -> AGENTS.md / CLAUDE.md / the skill are
+  - Same file schema, stale rules -> AGENTS.md / CLAUDE.md / the skills are
                                      refreshed; memory-bank/ is left untouched.
   - File schema does NOT match    -> the old memory bank is backed up to
     (e.g. profile changed, or a      .old/memory-bank-<timestamp>/, fresh
@@ -149,6 +151,8 @@ TEMPLATE_DIR="$AGENT_RULES_ROOT/templates/$TEMPLATE_DIR_NAME"
 INSTRUCTIONS_SRC="$AGENT_RULES_ROOT/instructions/AGENTS.${PROFILE}.md"
 SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank/SKILL.md"
 SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank/SKILL.md"
+READ_ONLY_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-read-only/SKILL.md"
+READ_ONLY_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-read-only/SKILL.md"
 EVIDENCE_REVIEW_SKILL_SRC="$AGENT_RULES_ROOT/skills/evidence-review/SKILL.md"
 EVIDENCE_REVIEW_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/evidence-review/SKILL.md"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -159,6 +163,9 @@ done
 
 if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$SKILL_SRC" ]; then
   die "required source not found: $SKILL_SRC (use --no-skill to skip)"
+fi
+if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$READ_ONLY_SKILL_SRC" ]; then
+  die "required source not found: $READ_ONLY_SKILL_SRC (use --no-skill to skip)"
 fi
 
 if [ "$INSTALL_SKILL" -eq 1 ] && [ "$PROFILE" = "incident-response" ] && [ ! -f "$EVIDENCE_REVIEW_SKILL_SRC" ]; then
@@ -270,6 +277,7 @@ install_claude() {
 install_skill() {
   [ "$INSTALL_SKILL" -eq 1 ] || return 0
   copy_file "$SKILL_SRC" "$SKILL_DEST"
+  copy_file "$READ_ONLY_SKILL_SRC" "$READ_ONLY_SKILL_DEST"
   if [ "$PROFILE" = "incident-response" ]; then
     copy_file "$EVIDENCE_REVIEW_SKILL_SRC" "$EVIDENCE_REVIEW_SKILL_DEST"
   fi
@@ -325,6 +333,8 @@ rules_match() {
   if [ "$INSTALL_SKILL" -eq 1 ]; then
     [ -f "$SKILL_DEST" ] || return 1
     diff -q "$SKILL_DEST" "$SKILL_SRC" >/dev/null 2>&1 || return 1
+    [ -f "$READ_ONLY_SKILL_DEST" ] || return 1
+    diff -q "$READ_ONLY_SKILL_DEST" "$READ_ONLY_SKILL_SRC" >/dev/null 2>&1 || return 1
     if [ "$PROFILE" = "incident-response" ]; then
       [ -f "$EVIDENCE_REVIEW_SKILL_DEST" ] || return 1
       diff -q "$EVIDENCE_REVIEW_SKILL_DEST" "$EVIDENCE_REVIEW_SKILL_SRC" >/dev/null 2>&1 || return 1
@@ -380,7 +390,8 @@ print_skill_advisory() {
   [ "$INSTALL_SKILL" -eq 1 ] || return 0
 
   log ""
-  log "Agent Skill installed to $SKILLS_DIR/memory-bank/"
+  log "Memory bank Agent Skill installed to $SKILLS_DIR/memory-bank/"
+  log "Read-only context skill installed to $SKILLS_DIR/memory-bank-read-only/"
   if [ "$PROFILE" = "incident-response" ]; then
     log "IR analysis skill installed to $SKILLS_DIR/evidence-review/"
   fi
@@ -400,6 +411,7 @@ print_skill_advisory() {
     log ""
     log "      mkdir -p .claude/skills && \\"
     log "        ln -s ../../$SKILLS_DIR/memory-bank .claude/skills/memory-bank"
+    log "      ln -s ../../$SKILLS_DIR/memory-bank-read-only .claude/skills/memory-bank-read-only"
     if [ "$PROFILE" = "incident-response" ]; then
       log "      ln -s ../../$SKILLS_DIR/evidence-review .claude/skills/evidence-review"
     fi

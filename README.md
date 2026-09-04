@@ -37,8 +37,10 @@ your-project/
 ├── AGENTS.md          # universal agent instructions (the single source)
 ├── CLAUDE.md          # one-line pointer to AGENTS.md (read by Claude Code)
 ├── .agents/skills/
-│   └── memory-bank/
-│       └── SKILL.md   # portable Agent Skill: init, migrate, audit
+│   ├── memory-bank/
+│   │   └── SKILL.md   # initialize, migrate, audit, and repair
+│   └── memory-bank-read-only/
+│       └── SKILL.md   # fast read-only session context loader
 └── memory-bank/
     ├── projectBrief.md
     ├── requirements.md
@@ -107,29 +109,41 @@ If the memory-bank skill is installed, your agent already has the full migration
 
 Codex, Cursor, and Copilot all support `AGENTS.md` files in subdirectories, with the nearest file taking precedence. Install this project's `AGENTS.md` at the repository root and add narrower `AGENTS.md` files per package if a subproject needs extra rules. Keep one `memory-bank/` at the root so all tools share it.
 
-## The memory-bank Agent Skill
+## Memory Bank Agent Skills
 
 [Agent Skills](https://agentskills.io/) are an open, cross-tool format: a folder with a `SKILL.md` that an agent loads **on demand** when the task matches its description. They are supported by Claude Code, GitHub Copilot / VS Code, Cursor, Codex, Gemini CLI, and many others.
 
-`init-agent-rules` installs the `memory-bank` skill into `.agents/skills/memory-bank/`. For the incident-response profile it also installs `evidence-review`, the explicit post-intake analysis workflow. These keep heavy, occasional procedures out of always-on context:
+`init-agent-rules` installs two skills for every profile:
 
-- **Initialize an existing project** — fill an empty or partial memory bank from real repository evidence.
-- **Migrate a backed-up memory bank** — map `.old/memory-bank-<timestamp>/` onto a new profile schema without losing history.
-- **Audit and repair** — check structure, freshness, accuracy, secret hygiene, and internal consistency.
-- **Review preserved IR evidence** — treat artifacts as hostile data, update the
-  canonical incident records, and regenerate the derived executive summary only
-  when an analyst requests review. Intake itself never triggers AI analysis.
+- **`memory-bank`** — the full lifecycle workflow for initializing, migrating,
+  auditing, and repairing project memory. It may update files and performs the
+  repository checks needed to ground those changes.
+- **`memory-bank-read-only`** — a lightweight context loader for a model or
+  agent harness that starts without project memory. It reads `AGENTS.md` and the
+  required existing memory files into the current session, returns a concise
+  context brief, and never writes, audits, repairs, scans the repository, or
+  runs verification commands.
+
+The incident-response profile also installs **`evidence-review`**, the explicit
+post-intake analysis workflow. Automated intake itself never triggers AI
+analysis.
 
 The division of labor:
 
-- `AGENTS.md` holds the always-on rules — what to read, the binary update rule, the response status line. It is loaded on every request, so it stays short.
-- `SKILL.md` holds the multi-step procedures. It is loaded only when relevant, so it costs nothing the rest of the time.
+- `AGENTS.md` holds the always-on rules: what to read, the binary update rule,
+  and the response status line.
+- `memory-bank` handles deliberate project-memory operations.
+- `memory-bank-read-only` handles fast session bootstrap from a bank that
+  already exists.
+- `evidence-review` handles authorized IR analysis after evidence intake.
 
-The `memory-bank` skill is profile-agnostic: it reads `AGENTS.md` to learn which profile is installed and which files that profile requires, so it never drifts from the profiles. The `evidence-review` skill is deliberately IR-specific and is installed only for the incident-response profile.
+Both memory-bank skills read `AGENTS.md` to learn the installed profile and
+required file list, so neither hard-codes a profile schema. Invoke a skill
+explicitly when the tool exposes slash commands, or describe the operation:
+“load this project’s memory bank read-only,” “audit my memory bank,” or “migrate
+the backup in `.old/`.”
 
-Invoke it explicitly (`/memory-bank` in tools that expose skills as slash commands) or just describe the task — "audit my memory bank", "migrate the backup in .old/" — and the agent loads it.
-
-### Making the skill discoverable
+### Making the skills discoverable
 
 `.agents/skills/` is the vendor-neutral location and is scanned by VS Code / Copilot out of the box. Claude Code is different: it loads skills only from the project's `.claude/skills/`, `~/.claude/skills/`, plugins, and enterprise-managed settings — so a skill in `.agents/skills/` is invisible to it, silently.
 
@@ -138,6 +152,7 @@ Invoke it explicitly (`/memory-bank` in tools that expose skills as slash comman
 ```bash
 # Claude Code
 mkdir -p .claude/skills && ln -s ../../.agents/skills/memory-bank .claude/skills/memory-bank
+ln -s ../../.agents/skills/memory-bank-read-only .claude/skills/memory-bank-read-only
 
 # Incident-response projects also link the evidence-review skill
 ln -s ../../.agents/skills/evidence-review .claude/skills/evidence-review
