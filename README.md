@@ -37,9 +37,9 @@ your-project/
 ├── AGENTS.md          # universal agent instructions (the single source)
 ├── CLAUDE.md          # one-line pointer to AGENTS.md (read by Claude Code)
 ├── .agents/skills/
-│   ├── memory-bank/
+│   ├── memory-bank-maintenance/
 │   │   └── SKILL.md   # initialize, migrate, audit, and repair
-│   └── memory-bank-read-only/
+│   └── memory-bank-context/
 │       └── SKILL.md   # fast read-only session context loader
 └── memory-bank/
     ├── projectBrief.md
@@ -87,11 +87,16 @@ Claude Code reads `CLAUDE.md` and never `AGENTS.md`, so a second file is unavoid
 | Same file schema, but the installed rules or skills are stale | Only `AGENTS.md`, `CLAUDE.md`, and the skills are refreshed; `memory-bank/` is left untouched. |
 | File schema does **not** match (profile changed, or a newer profile added/removed files) | The old memory bank (plus `AGENTS.md`/`CLAUDE.md`) is moved to `.old/memory-bank-<timestamp>/`, fresh scaffolding is created, and you are told to ask your agent to migrate the old data. |
 
+When upgrading from the former skill names, a re-run removes the obsolete
+managed `SKILL.md` files from the configured skills directory and installs the
+new names. Manually created links in other tool-specific skill directories must
+be removed and recreated.
+
 Migrating old data is a content-mapping task a bash script cannot do reliably, so after a schema-mismatch re-init, ask your agent, e.g.:
 
 > "Migrate my memory bank from `.old/memory-bank-<timestamp>/` into the new `memory-bank/` scaffolding. Map old content to the new files, preserve history, and mark anything superseded."
 
-If the memory-bank skill is installed, your agent already has the full migration procedure — see [The memory-bank Agent Skill](#the-memory-bank-agent-skill).
+If the maintenance skill is installed, your agent already has the full migration procedure — see [Memory Bank Agent Skills](#memory-bank-agent-skills).
 
 ## How It Works
 
@@ -115,27 +120,28 @@ Codex, Cursor, and Copilot all support `AGENTS.md` files in subdirectories, with
 
 `init-agent-rules` installs two skills for every profile:
 
-- **`memory-bank`** — the full lifecycle workflow for initializing, migrating,
-  auditing, and repairing project memory. It may update files and performs the
-  repository checks needed to ground those changes.
-- **`memory-bank-read-only`** — a lightweight context loader for a model or
-  agent harness that starts without project memory. It reads `AGENTS.md` and the
+- **`memory-bank-maintenance`** — the full lifecycle workflow for initializing,
+  migrating, auditing, and repairing project memory. It may update files and
+  performs the repository checks needed to ground those changes.
+- **`memory-bank-context`** — a lightweight context loader for a model or agent
+  harness that starts without project memory. It reads `AGENTS.md` and the
   required existing memory files into the current session, returns a concise
   context brief, and never writes, audits, repairs, scans the repository, or
   runs verification commands.
 
-The incident-response profile also installs **`evidence-review`**, the explicit
-post-intake analysis workflow. Automated intake itself never triggers AI
-analysis.
+The incident-response profile also installs
+**`memory-bank-ir-evidence-review`**, the explicit post-intake analysis
+workflow. Automated intake itself never triggers AI analysis.
 
 The division of labor:
 
 - `AGENTS.md` holds the always-on rules: what to read, the binary update rule,
   and the response status line.
-- `memory-bank` handles deliberate project-memory operations.
-- `memory-bank-read-only` handles fast session bootstrap from a bank that
-  already exists.
-- `evidence-review` handles authorized IR analysis after evidence intake.
+- `memory-bank-maintenance` handles deliberate project-memory maintenance.
+- `memory-bank-context` handles fast session bootstrap from a bank that already
+  exists.
+- `memory-bank-ir-evidence-review` handles authorized IR analysis after evidence
+  intake.
 
 Both memory-bank skills read `AGENTS.md` to learn the installed profile and
 required file list, so neither hard-codes a profile schema. Invoke a skill
@@ -151,14 +157,14 @@ the backup in `.old/`.”
 
 ```bash
 # Claude Code
-mkdir -p .claude/skills && ln -s ../../.agents/skills/memory-bank .claude/skills/memory-bank
-ln -s ../../.agents/skills/memory-bank-read-only .claude/skills/memory-bank-read-only
+mkdir -p .claude/skills && ln -s ../../.agents/skills/memory-bank-maintenance .claude/skills/memory-bank-maintenance
+ln -s ../../.agents/skills/memory-bank-context .claude/skills/memory-bank-context
 
-# Incident-response projects also link the evidence-review skill
-ln -s ../../.agents/skills/evidence-review .claude/skills/evidence-review
+# Incident-response projects also link the IR evidence-review skill
+ln -s ../../.agents/skills/memory-bank-ir-evidence-review .claude/skills/memory-bank-ir-evidence-review
 
 # GitHub-convention location, if you prefer it
-mkdir -p .github/skills && ln -s ../../.agents/skills/memory-bank .github/skills/memory-bank
+mkdir -p .github/skills && ln -s ../../.agents/skills/memory-bank-maintenance .github/skills/memory-bank-maintenance
 ```
 
 Restart Claude Code afterward if a session is already open — it watches skill directories for changes, but only ones that existed at startup.
@@ -173,7 +179,7 @@ Use `--no-skill` to skip it entirely; the memory bank works without it.
 
 ## IR Dashboard and Evidence Workflow
 
-`skills/ir-dashboard/` is an optional local web dashboard and evidence pipeline
+`skills/memory-bank-ir-dashboard/` is an optional local web dashboard and evidence pipeline
 for incident-response projects. It provides live views of the incident record,
 a bounded JSON event viewer, transactional evidence intake, a review queue, and
 a semantic consistency validator.
@@ -187,7 +193,7 @@ cd /path/to/project
 init-agent-rules incident-response
 
 cd /path/to/mb-agent-rules
-bash skills/ir-dashboard/setup.sh /path/to/project \
+bash skills/memory-bank-ir-dashboard/setup.sh /path/to/project \
   --title "Operation Name" \
   --accent "#10b981"
 ```
@@ -233,7 +239,7 @@ truncated.
 
 Automated intake never interprets evidence or creates timeline events, findings,
 or IOCs. It leaves analytical fields `PENDING`. Ask an agent to process the queue
-with the installed `evidence-review` skill when analysis is authorized; there is
+with the installed `memory-bank-ir-evidence-review` skill when analysis is authorized; there is
 no automatic AI call from the dashboard.
 
 ### Dashboard and validator safeguards
@@ -253,8 +259,8 @@ no automatic AI call from the dashboard.
   references, review state, and `executiveSummary.json` schema consistency.
 
 For detailed operation and configuration, see
-[`skills/ir-dashboard/SKILL.md`](skills/ir-dashboard/SKILL.md) and
-[`skills/ir-dashboard/DASHBOARD.md`](skills/ir-dashboard/DASHBOARD.md).
+[`skills/memory-bank-ir-dashboard/SKILL.md`](skills/memory-bank-ir-dashboard/SKILL.md) and
+[`skills/memory-bank-ir-dashboard/DASHBOARD.md`](skills/memory-bank-ir-dashboard/DASHBOARD.md).
 
 For a fictional walkthrough, pass `--with-sample-data` during setup. The bundled
 four-file ransomware scenario contains 96 synthetic events and no real incident

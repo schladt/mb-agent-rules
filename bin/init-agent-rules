@@ -32,10 +32,12 @@ Run this command from the root of the target project. It initializes:
   memory-bank/                    from the selected project type template
   AGENTS.md                       universal agent instructions
   CLAUDE.md                       pointer to AGENTS.md (for Claude Code)
-  .agents/skills/memory-bank/     portable Agent Skill for memory bank work
-  .agents/skills/memory-bank-read-only/
+  .agents/skills/memory-bank-maintenance/
+                                   memory-bank lifecycle Agent Skill
+  .agents/skills/memory-bank-context/
                                    read-only context-loading Agent Skill
-  .agents/skills/evidence-review/ IR analysis skill (incident-response only)
+  .agents/skills/memory-bank-ir-evidence-review/
+                                   IR analysis skill (incident-response only)
 
 Options:
   --claude-mode=MODE  how CLAUDE.md is written (default: import)
@@ -149,27 +151,27 @@ esac
 TARGET_ROOT="$(pwd -P)"
 TEMPLATE_DIR="$AGENT_RULES_ROOT/templates/$TEMPLATE_DIR_NAME"
 INSTRUCTIONS_SRC="$AGENT_RULES_ROOT/instructions/AGENTS.${PROFILE}.md"
-SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank/SKILL.md"
-SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank/SKILL.md"
-READ_ONLY_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-read-only/SKILL.md"
-READ_ONLY_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-read-only/SKILL.md"
-EVIDENCE_REVIEW_SKILL_SRC="$AGENT_RULES_ROOT/skills/evidence-review/SKILL.md"
-EVIDENCE_REVIEW_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/evidence-review/SKILL.md"
+MAINTENANCE_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-maintenance/SKILL.md"
+MAINTENANCE_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-maintenance/SKILL.md"
+CONTEXT_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-context/SKILL.md"
+CONTEXT_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-context/SKILL.md"
+IR_EVIDENCE_REVIEW_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-ir-evidence-review/SKILL.md"
+IR_EVIDENCE_REVIEW_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-ir-evidence-review/SKILL.md"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 for required in "$TEMPLATE_DIR" "$INSTRUCTIONS_SRC"; do
   [ -e "$required" ] || die "required source not found: $required"
 done
 
-if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$SKILL_SRC" ]; then
-  die "required source not found: $SKILL_SRC (use --no-skill to skip)"
+if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$MAINTENANCE_SKILL_SRC" ]; then
+  die "required source not found: $MAINTENANCE_SKILL_SRC (use --no-skill to skip)"
 fi
-if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$READ_ONLY_SKILL_SRC" ]; then
-  die "required source not found: $READ_ONLY_SKILL_SRC (use --no-skill to skip)"
+if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$CONTEXT_SKILL_SRC" ]; then
+  die "required source not found: $CONTEXT_SKILL_SRC (use --no-skill to skip)"
 fi
 
-if [ "$INSTALL_SKILL" -eq 1 ] && [ "$PROFILE" = "incident-response" ] && [ ! -f "$EVIDENCE_REVIEW_SKILL_SRC" ]; then
-  die "required source not found: $EVIDENCE_REVIEW_SKILL_SRC (use --no-skill to skip)"
+if [ "$INSTALL_SKILL" -eq 1 ] && [ "$PROFILE" = "incident-response" ] && [ ! -f "$IR_EVIDENCE_REVIEW_SKILL_SRC" ]; then
+  die "required source not found: $IR_EVIDENCE_REVIEW_SKILL_SRC (use --no-skill to skip)"
 fi
 
 # Required memory-bank file names for this profile (the canonical schema).
@@ -274,12 +276,35 @@ install_claude() {
   fi
 }
 
+remove_legacy_skill() {
+  local name="$1"
+  local dest="$TARGET_ROOT/$SKILLS_DIR/$name"
+
+  { [ -L "$dest" ] || [ -f "$dest/SKILL.md" ]; } || return 0
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "remove legacy skill: ${dest#$TARGET_ROOT/}"
+    return 0
+  fi
+
+  if [ -L "$dest" ]; then
+    rm -f "$dest"
+  else
+    rm -f "$dest/SKILL.md"
+    rmdir "$dest" 2>/dev/null || true
+  fi
+  log "removed legacy skill: ${dest#$TARGET_ROOT/}"
+}
+
 install_skill() {
   [ "$INSTALL_SKILL" -eq 1 ] || return 0
-  copy_file "$SKILL_SRC" "$SKILL_DEST"
-  copy_file "$READ_ONLY_SKILL_SRC" "$READ_ONLY_SKILL_DEST"
+  remove_legacy_skill "memory-bank"
+  remove_legacy_skill "memory-bank-read-only"
+  remove_legacy_skill "evidence-review"
+  copy_file "$MAINTENANCE_SKILL_SRC" "$MAINTENANCE_SKILL_DEST"
+  copy_file "$CONTEXT_SKILL_SRC" "$CONTEXT_SKILL_DEST"
   if [ "$PROFILE" = "incident-response" ]; then
-    copy_file "$EVIDENCE_REVIEW_SKILL_SRC" "$EVIDENCE_REVIEW_SKILL_DEST"
+    copy_file "$IR_EVIDENCE_REVIEW_SKILL_SRC" "$IR_EVIDENCE_REVIEW_SKILL_DEST"
   fi
 }
 
@@ -316,7 +341,7 @@ structure_matches() {
   return 0
 }
 
-# Installed AGENTS.md, CLAUDE.md, and the skill are exactly what we would write.
+# Installed AGENTS.md, CLAUDE.md, and the skills are exactly what we would write.
 rules_match() {
   [ -f "$TARGET_ROOT/AGENTS.md" ] || return 1
   diff -q "$TARGET_ROOT/AGENTS.md" "$INSTRUCTIONS_SRC" >/dev/null 2>&1 || return 1
@@ -331,13 +356,19 @@ rules_match() {
   fi
 
   if [ "$INSTALL_SKILL" -eq 1 ]; then
-    [ -f "$SKILL_DEST" ] || return 1
-    diff -q "$SKILL_DEST" "$SKILL_SRC" >/dev/null 2>&1 || return 1
-    [ -f "$READ_ONLY_SKILL_DEST" ] || return 1
-    diff -q "$READ_ONLY_SKILL_DEST" "$READ_ONLY_SKILL_SRC" >/dev/null 2>&1 || return 1
+    [ ! -L "$TARGET_ROOT/$SKILLS_DIR/memory-bank" ] || return 1
+    [ ! -f "$TARGET_ROOT/$SKILLS_DIR/memory-bank/SKILL.md" ] || return 1
+    [ ! -L "$TARGET_ROOT/$SKILLS_DIR/memory-bank-read-only" ] || return 1
+    [ ! -f "$TARGET_ROOT/$SKILLS_DIR/memory-bank-read-only/SKILL.md" ] || return 1
+    [ ! -L "$TARGET_ROOT/$SKILLS_DIR/evidence-review" ] || return 1
+    [ ! -f "$TARGET_ROOT/$SKILLS_DIR/evidence-review/SKILL.md" ] || return 1
+    [ -f "$MAINTENANCE_SKILL_DEST" ] || return 1
+    diff -q "$MAINTENANCE_SKILL_DEST" "$MAINTENANCE_SKILL_SRC" >/dev/null 2>&1 || return 1
+    [ -f "$CONTEXT_SKILL_DEST" ] || return 1
+    diff -q "$CONTEXT_SKILL_DEST" "$CONTEXT_SKILL_SRC" >/dev/null 2>&1 || return 1
     if [ "$PROFILE" = "incident-response" ]; then
-      [ -f "$EVIDENCE_REVIEW_SKILL_DEST" ] || return 1
-      diff -q "$EVIDENCE_REVIEW_SKILL_DEST" "$EVIDENCE_REVIEW_SKILL_SRC" >/dev/null 2>&1 || return 1
+      [ -f "$IR_EVIDENCE_REVIEW_SKILL_DEST" ] || return 1
+      diff -q "$IR_EVIDENCE_REVIEW_SKILL_DEST" "$IR_EVIDENCE_REVIEW_SKILL_SRC" >/dev/null 2>&1 || return 1
     fi
   fi
 
@@ -390,10 +421,10 @@ print_skill_advisory() {
   [ "$INSTALL_SKILL" -eq 1 ] || return 0
 
   log ""
-  log "Memory bank Agent Skill installed to $SKILLS_DIR/memory-bank/"
-  log "Read-only context skill installed to $SKILLS_DIR/memory-bank-read-only/"
+  log "Memory bank maintenance skill installed to $SKILLS_DIR/memory-bank-maintenance/"
+  log "Read-only context skill installed to $SKILLS_DIR/memory-bank-context/"
   if [ "$PROFILE" = "incident-response" ]; then
-    log "IR analysis skill installed to $SKILLS_DIR/evidence-review/"
+    log "IR analysis skill installed to $SKILLS_DIR/memory-bank-ir-evidence-review/"
   fi
 
   case "$SKILLS_DIR" in
@@ -410,10 +441,10 @@ print_skill_advisory() {
     log "  Claude Code detected. It only scans .claude/skills/, so link it there:"
     log ""
     log "      mkdir -p .claude/skills && \\"
-    log "        ln -s ../../$SKILLS_DIR/memory-bank .claude/skills/memory-bank"
-    log "      ln -s ../../$SKILLS_DIR/memory-bank-read-only .claude/skills/memory-bank-read-only"
+    log "        ln -s ../../$SKILLS_DIR/memory-bank-maintenance .claude/skills/memory-bank-maintenance"
+    log "      ln -s ../../$SKILLS_DIR/memory-bank-context .claude/skills/memory-bank-context"
     if [ "$PROFILE" = "incident-response" ]; then
-      log "      ln -s ../../$SKILLS_DIR/evidence-review .claude/skills/evidence-review"
+      log "      ln -s ../../$SKILLS_DIR/memory-bank-ir-evidence-review .claude/skills/memory-bank-ir-evidence-review"
     fi
     log ""
     log "  Restart Claude Code afterward if a session is already open."

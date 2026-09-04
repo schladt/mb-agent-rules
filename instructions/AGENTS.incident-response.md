@@ -67,7 +67,7 @@ Any time an analyst supplies material — a log file, an export, a screenshot or
 
 If any step cannot be completed, record what was done, record what was not, and say so. A partially ingested artifact that is honestly labelled is recoverable; a silently incomplete one is not.
 
-Automated `intake.py` runs stop at a deliberate review boundary. They may atomically add the verified artifact, an immutable custody entry, a `reviewQueue.md` item, and an acquisition entry in `progress.md`; they must not infer event time, relevance, findings, or indicators. The result remains `PENDING` until an analyst or agent explicitly runs the evidence-review workflow. An agent that triggers intake must tell the user that analysis is still pending.
+Automated `intake.py` runs stop at a deliberate review boundary. They may atomically add the verified artifact, an immutable custody entry, a `reviewQueue.md` item, and an acquisition entry in `progress.md`; they must not infer event time, relevance, findings, or indicators. The result remains `PENDING` until an analyst or agent explicitly runs the `memory-bank-ir-evidence-review` workflow. An agent that triggers intake must tell the user that analysis is still pending.
 
 ### 5) Recording Rules
 

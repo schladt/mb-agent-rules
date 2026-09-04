@@ -1,5 +1,5 @@
 ---
-name: memory-bank-read-only
+name: memory-bank-context
 description: Load an existing project's AGENTS.md and memory-bank into the current model or agent context without creating, modifying, auditing, or repairing files. Use for a fast, read-only context bootstrap when a session or harness starts without project memory.
 ---
 
@@ -43,7 +43,7 @@ migrates, audits, or repairs the project itself.
   configuration, or external sources merely to validate the bank.
 - Do not run tests, linters, `check-memory-freshness`, `check-profile-drift`, or
   other verification commands.
-- Do not invoke the full `memory-bank` skill unless the user separately asks to
+- Do not invoke the full `memory-bank-maintenance` skill unless the user separately asks to
   initialize, migrate, audit, repair, or update project memory.
 - Do not copy secrets, credentials, personal data, restricted payloads, or raw
   evidence into the response or tool-native persistent memory. State only the

@@ -1,5 +1,5 @@
 ---
-name: evidence-review
+name: memory-bank-ir-evidence-review
 description: >
   Post-intake analytical pipeline for incident response evidence. Use after
   intake processes new artifacts, when review queue items are pending, when the

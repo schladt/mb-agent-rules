@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sets up the IR Dashboard in a project that uses the incident-response memory bank profile.
-# Run from the mb-agent-rules repo: bash skills/ir-dashboard/setup.sh /path/to/project
+# Run from the mb-agent-rules repo: bash skills/memory-bank-ir-dashboard/setup.sh /path/to/project
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -220,8 +220,8 @@ for ignored in artifacts/ incoming/ dashboard/certs/ dashboard/venv/ dashboard/c
 done
 echo "  ✓  Ensured evidence and dashboard runtime state are in .gitignore"
 
-if [ ! -f "$PROJECT_ROOT/.agents/skills/evidence-review/SKILL.md" ] && [ ! -f "$PROJECT_ROOT/.claude/skills/evidence-review/SKILL.md" ]; then
-  echo "  ⚠  evidence-review skill is not installed in this project."
+if [ ! -f "$PROJECT_ROOT/.agents/skills/memory-bank-ir-evidence-review/SKILL.md" ] && [ ! -f "$PROJECT_ROOT/.claude/skills/memory-bank-ir-evidence-review/SKILL.md" ]; then
+  echo "  ⚠  memory-bank-ir-evidence-review skill is not installed in this project."
   echo "     Re-run init-agent-rules incident-response so agents can process the review queue."
 fi
 

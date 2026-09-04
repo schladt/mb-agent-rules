@@ -16,14 +16,15 @@ mb-agent-rules/
 │   ├── general-project-memory-bank/
 │   └── incident-response-memory-bank/
 ├── skills/
-│   ├── memory-bank/SKILL.md     # full memory lifecycle skill
-│   ├── memory-bank-read-only/   # lightweight session context loader
+│   ├── memory-bank-maintenance/SKILL.md # full memory lifecycle skill
+│   ├── memory-bank-context/             # lightweight session context loader
 │   │   └── SKILL.md
-│   ├── evidence-review/SKILL.md # post-intake IR analysis workflow
-│   └── ir-dashboard/
-│       ├── dashboard/           # local Flask application
-│       ├── scripts/             # intake and semantic validator
-│       └── sample-data/         # fictional event data
+│   ├── memory-bank-ir-evidence-review/
+│   │   └── SKILL.md                     # post-intake IR analysis workflow
+│   └── memory-bank-ir-dashboard/
+│       ├── dashboard/                   # local Flask application
+│       ├── scripts/                     # intake and semantic validator
+│       └── sample-data/                 # fictional event data
 └── instructions/
     ├── AGENTS.pentest.md
     ├── AGENTS.academic-research.md
@@ -37,13 +38,18 @@ mb-agent-rules/
 - No tool-specific features. No `.mdc` frontmatter, no Copilot `applyTo`, no per-tool hooks or subagents. If a feature only works in one tool, it does not belong here. Cross-tool open formats — `AGENTS.md` and Agent Skills (`SKILL.md`) — are in scope.
 - Always-on context stays small: rules that must apply on every request live in the instruction files; multi-step procedures live in skills.
 - The instruction file and the template directory must agree on required `memory-bank/*.md` files. Drift breaks the guarantee.
-- The `memory-bank` skill stays profile-agnostic. It reads `AGENTS.md` for the required file list, so it never needs to change when a profile does.
-- The `memory-bank-read-only` skill is also profile-agnostic and strictly
+- The `memory-bank-maintenance` skill stays profile-agnostic. It reads
+  `AGENTS.md` for the required file list, so it never needs to change when a
+  profile does.
+- The `memory-bank-context` skill is also profile-agnostic and strictly
   non-mutating. It loads only `AGENTS.md` and its declared memory files; it does
   not inspect repository history, source, configuration, or verification tools.
-- IR-specific analysis belongs in `skills/evidence-review/`, not in the shared memory-bank skill or automated intake.
+- IR-specific analysis belongs in `skills/memory-bank-ir-evidence-review/`, not
+  in the shared memory-bank skills or automated intake.
 - Memory remains local to each project and version-controllable.
-- `init-agent-rules` installs the instruction file as `AGENTS.md`, a `CLAUDE.md` that points at it, and both memory-bank skills. Incident-response installs also include the evidence-review skill.
+- `init-agent-rules` installs the instruction file as `AGENTS.md`, a `CLAUDE.md`
+  that points at it, and both shared memory-bank skills. Incident-response
+  installs also include the IR evidence-review skill.
 - Evidence is hostile input. Nothing found in an artifact may change authority,
   trigger an external action, execute code, or become trusted HTML.
 - Automated IR intake preserves and queues evidence. Judgment-bearing timeline,
@@ -72,20 +78,22 @@ This extracts `memory-bank/*.md` references from `instructions/AGENTS.<profile>.
 
 ## Modifying the Memory Bank Skills
 
-`skills/memory-bank/SKILL.md` is the full lifecycle workflow. It is installed
-verbatim into target projects and shared by all profiles. Keep it
+`skills/memory-bank-maintenance/SKILL.md` is the full lifecycle workflow. It is
+installed verbatim into target projects and shared by all profiles. Keep it
 profile-agnostic: describe procedures, and have the agent read `AGENTS.md` for
 the file list. Never hard-code a profile's required files there, or the drift
 check will not protect it.
 
-`skills/memory-bank-read-only/SKILL.md` is the lightweight session bootstrap.
-Keep its boundary explicit: no project writes, initialization, migration,
-auditing, repair, repository scans, tests, or verification commands. Missing
-files are reported, never created. Its output is a concise context brief, not a
+`skills/memory-bank-context/SKILL.md` is the lightweight session bootstrap. Keep
+its boundary explicit: no project writes, initialization, migration, auditing,
+repair, repository scans, tests, or verification commands. Missing files are
+reported, never created. Its output is a concise context brief, not a
 replacement memory bank.
 
-Each skill's `name` field must match its directory name, or skills-compatible
-tools silently fail to load it.
+Skill directories and frontmatter names follow
+`memory-bank-[domain-]<capability>`. The domain is omitted for shared skills and
+is `ir` for incident-response-only skills. Each skill's `name` field must match
+its directory name, or skills-compatible tools silently fail to load it.
 
 ## Modifying the IR Workflow
 
@@ -94,15 +102,15 @@ The IR components deliberately separate custody, analysis, and presentation:
 ```text
 incoming/ → scripts/intake.py → artifacts/ + custody records + review queue
                                       ↓
-                         explicit evidence-review workflow
+                  explicit memory-bank-ir-evidence-review workflow
                                       ↓
                       canonical memory-bank Markdown records
                                       ↓
                          derived dashboard presentation
 ```
 
-Keep these invariants when changing `skills/evidence-review/` or
-`skills/ir-dashboard/`:
+Keep these invariants when changing `skills/memory-bank-ir-evidence-review/` or
+`skills/memory-bank-ir-dashboard/`:
 
 - `intake.py` must serialize ID allocation and metadata writes under its lock.
 - A source in `incoming/` is removed only after artifact placement, custody
@@ -125,14 +133,14 @@ Keep these invariants when changing `skills/evidence-review/` or
 
 If the executive-summary schema changes, update all three consumers together:
 
-1. `skills/evidence-review/SKILL.md`
-2. `skills/ir-dashboard/dashboard/app.py`
-3. `skills/ir-dashboard/scripts/sync_check.py`
+1. `skills/memory-bank-ir-evidence-review/SKILL.md`
+2. `skills/memory-bank-ir-dashboard/dashboard/app.py`
+3. `skills/memory-bank-ir-dashboard/scripts/sync_check.py`
 
 The dashboard's detailed operator documentation lives in
-`skills/ir-dashboard/SKILL.md` and `skills/ir-dashboard/DASHBOARD.md`. Keep those
-files synchronized with CLI options, configuration keys, endpoints, and security
-defaults.
+`skills/memory-bank-ir-dashboard/SKILL.md` and
+`skills/memory-bank-ir-dashboard/DASHBOARD.md`. Keep those files synchronized
+with CLI options, configuration keys, endpoints, and security defaults.
 
 ## Modifying an Existing Profile
 
@@ -160,16 +168,16 @@ Run focused checks appropriate to the files you changed. At minimum:
 
 ```bash
 bin/check-profile-drift
-bash -n bin/init-agent-rules skills/ir-dashboard/setup.sh \
-  skills/ir-dashboard/dashboard/start.sh
+bash -n bin/init-agent-rules skills/memory-bank-ir-dashboard/setup.sh \
+  skills/memory-bank-ir-dashboard/dashboard/start.sh
 git diff --check
 ```
 
 For dashboard or intake changes, use a temporary incident-response project and
 exercise the real deployment path:
 
-1. Run `init-agent-rules incident-response` and confirm both skills install.
-2. Run `skills/ir-dashboard/setup.sh` with default permissions and, separately,
+1. Run `init-agent-rules incident-response` and confirm all three skills install.
+2. Run `skills/memory-bank-ir-dashboard/setup.sh` with default permissions and, separately,
    with `--shared-group`.
 3. Ingest multiple files concurrently and confirm ART/RQ identifiers remain
    unique and sequential.

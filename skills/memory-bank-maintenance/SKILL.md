@@ -1,14 +1,14 @@
 ---
-name: memory-bank
+name: memory-bank-maintenance
 description: Initialize, migrate, audit, or repair a project-local memory bank (the memory-bank directory described in AGENTS.md). Use when the memory bank is missing, out of date, was just backed up to .old/, or when asked to re-initialize, migrate, audit, or verify project memory.
 ---
 
-# Memory Bank Operations
+# Memory Bank Maintenance
 
 Procedures for setting up and maintaining the project-local memory bank. The
 always-on rules — what to read, when to update, the response status line — live
 in `AGENTS.md` at the project root. This skill covers the occasional, multi-step
-operations that do not belong in always-on context.
+maintenance tasks that do not belong in always-on context.
 
 Read `AGENTS.md` first. It is the authority for which profile is installed and
 which `memory-bank/*.md` files that profile requires. Never invent a file list.
