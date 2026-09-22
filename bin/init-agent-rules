@@ -160,6 +160,14 @@ CONTEXT_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-context/SKILL.md"
 CONTEXT_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-context/SKILL.md"
 IR_EVIDENCE_REVIEW_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-ir-evidence-review/SKILL.md"
 IR_EVIDENCE_REVIEW_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-ir-evidence-review/SKILL.md"
+
+# Skill directory names installed for this profile (order stable). Claude Code
+# is mirrored these names under .claude/skills/; LEGACY_SKILLS are pruned.
+INSTALLED_SKILLS=("memory-bank-maintenance" "memory-bank-context")
+if [ "$PROFILE" = "incident-response" ]; then
+  INSTALLED_SKILLS+=("memory-bank-ir-evidence-review")
+fi
+LEGACY_SKILLS=("memory-bank" "memory-bank-read-only" "evidence-review")
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
 SENSITIVE_STORE_DIRS=("sensitive")
@@ -363,6 +371,56 @@ install_skill() {
   if [ "$PROFILE" = "incident-response" ]; then
     copy_file "$IR_EVIDENCE_REVIEW_SKILL_SRC" "$IR_EVIDENCE_REVIEW_SKILL_DEST"
   fi
+  link_claude_skills
+}
+
+# Claude Code only scans .claude/skills/ (plus ~/.claude/skills and plugins), so
+# a skill installed under $SKILLS_DIR is invisible to it. When Claude Code is
+# present we want to mirror each skill there with a relative symlink.
+want_claude_links() {
+  [ "$INSTALL_SKILL" -eq 1 ] || return 1
+  case "$SKILLS_DIR" in
+    .claude/skills|.claude/skills/) return 1 ;;
+  esac
+  claude_code_present
+}
+
+# Create/refresh .claude/skills/<name> -> ../../$SKILLS_DIR/<name> symlinks and
+# prune links from earlier skill names. Idempotent; safe to re-run.
+link_claude_skills() {
+  want_claude_links || return 0
+
+  local links_dir="$TARGET_ROOT/.claude/skills"
+  local name dest target legacy
+
+  for legacy in "${LEGACY_SKILLS[@]}"; do
+    [ -L "$links_dir/$legacy" ] || continue
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "remove legacy claude link: .claude/skills/$legacy"
+    else
+      rm -f "$links_dir/$legacy"
+      log "removed legacy claude link: .claude/skills/$legacy"
+    fi
+  done
+
+  for name in "${INSTALLED_SKILLS[@]}"; do
+    dest="$links_dir/$name"
+    target="../../$SKILLS_DIR/$name"
+
+    if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$target" ]; then
+      continue
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "link for Claude Code: .claude/skills/$name -> $target"
+      continue
+    fi
+
+    run_mkdir "$links_dir"
+    rm -f "$dest"
+    ln -s "$target" "$dest"
+    log "linked for Claude Code: .claude/skills/$name -> $target"
+  done
 }
 
 # Move an existing path into the backup directory, preserving its basename.
@@ -427,6 +485,17 @@ rules_match() {
       [ -f "$IR_EVIDENCE_REVIEW_SKILL_DEST" ] || return 1
       diff -q "$IR_EVIDENCE_REVIEW_SKILL_DEST" "$IR_EVIDENCE_REVIEW_SKILL_SRC" >/dev/null 2>&1 || return 1
     fi
+  fi
+
+  if want_claude_links; then
+    local link_name legacy_link
+    for legacy_link in "${LEGACY_SKILLS[@]}"; do
+      [ ! -L "$TARGET_ROOT/.claude/skills/$legacy_link" ] || return 1
+    done
+    for link_name in "${INSTALLED_SKILLS[@]}"; do
+      [ -L "$TARGET_ROOT/.claude/skills/$link_name" ] || return 1
+      [ "$(readlink "$TARGET_ROOT/.claude/skills/$link_name")" = "../../$SKILLS_DIR/$link_name" ] || return 1
+    done
   fi
 
   return 0
@@ -494,18 +563,11 @@ print_skill_advisory() {
 
   log "  Read directly by VS Code / GitHub Copilot, which scans .agents/skills/."
 
-  if claude_code_present; then
+  if want_claude_links; then
     log ""
-    log "  Claude Code detected. It only scans .claude/skills/, so link it there:"
-    log ""
-    log "      mkdir -p .claude/skills && \\"
-    log "        ln -s ../../$SKILLS_DIR/memory-bank-maintenance .claude/skills/memory-bank-maintenance"
-    log "      ln -s ../../$SKILLS_DIR/memory-bank-context .claude/skills/memory-bank-context"
-    if [ "$PROFILE" = "incident-response" ]; then
-      log "      ln -s ../../$SKILLS_DIR/memory-bank-ir-evidence-review .claude/skills/memory-bank-ir-evidence-review"
-    fi
-    log ""
-    log "  Restart Claude Code afterward if a session is already open."
+    log "  Claude Code detected: mirrored each skill into .claude/skills/ via a"
+    log "  relative symlink so it is discovered there too."
+    log "  Restart Claude Code if a session is already open."
   else
     log "  For tools that scan elsewhere, symlink or re-run with --skills-dir=PATH."
   fi
