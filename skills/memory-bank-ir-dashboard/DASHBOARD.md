@@ -74,6 +74,26 @@ projection only; its `status` field is not a competing execution display or exte
 publication source. No projection means no inferred attack phases. Invalid JSON or
 schema/reference failures produce a visible analytical-projection error.
 
+The dashboard does not publish root `team-status.md` (`# Team Status`); the shared
+workflow generates that separate team coordination artifact from the private
+execution authority. `--external-status` and `external_status` mean output outside
+the bank, not client delivery. Publishable means approved for team readership;
+the source and receipt remain private. Client-facing reports/exports belong in
+`deliverables/`, and client updates in the project's separate client update file.
+
+Team updates must stand alone for teammates without bank access: detailed context,
+scope/coverage, organized workstreams/results, milestones and known owners/dates,
+blocker impacts/unblocking steps, prioritized actionable next steps and client
+dependencies. Preserve the source's exact five-section grammar; use bold workstream
+labels, nested bullets or tables, not extra Publishable headings or code fences.
+State unknowns and never invent completion, certainty, owners or dates; dates
+describe sourced facts, not generation time. Describe context/results in prose even
+with links. Links must be team-accessible and resolve relative to root
+`team-status.md`, not the bank source. `.memory-bank/` links, raw evidence and opaque
+artifact IDs cannot be required context: generation depends on the bank, readership
+does not. Warnings do not prove sanitization or grant sharing permission; generation
+failures retain prior valid output and must be disclosed as errors/staleness.
+
 `ir_common.projection_errors(value, findings=..., artifacts=...)` is used by both
 server and checker. It requires schema 1, an explicit UTC `generated_at`, at most
 20 phases/100 findings, required string fields, nonnegative integer counts (not

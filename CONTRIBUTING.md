@@ -38,7 +38,7 @@ The ignore and output policies below describe installed target projects, not thi
 - Always-on instructions stay small; multi-step procedures and complete referenced scripts/resources belong in skills. Install whole packages, not only `SKILL.md`.
 - `.memory-bank/` is the only live bank. Cognitive files, `planning/archive`, `incoming`, `references/{reference.md,datasets,raw}`, `sensitive`, `artifacts`, `backups`, and `runtime` sit directly beneath it. No intermediate `private/`, legacy fallback, or parallel live stores.
 - Cognitive loading is an explicit file allowlist, not recursive traversal. Raw stores/backups may be inventoried, hashed, or copied during authorized migration without becoming session memory.
-- Actual reports, exports, and zips live once at top-level `deliverables/`. Findings/assets and optional root `project-status.md` remain Git-eligible. Local generation does not authorize staging, committing, or external publication.
+- Actual reports, exports, and zips live once at top-level `deliverables/`. Findings/assets and optional root `team-status.md` remain Git-eligible. Team status is coordination for teammates without bank access, not client delivery; client-facing updates belong in the project's separate client update file. Local generation does not authorize staging, committing, or external publication.
 - No report-builder dependency, adapter, compiler, or promised DOCX/Google Docs generation. Findings are tool-neutral Markdown and assets.
 - Bank sharing means tools in the same checkout, not automatic collaborator/worktree/cloud sharing. Owner provisioning is explicit. Git cannot certify changes to an ignored bank.
 
@@ -82,11 +82,15 @@ Intake classifies before routing; mixed origins get one governed primary home pl
 
 Plan archival preserves content/history, dated paths, completion and move records, and active backlinks. Collisions must not overwrite old history. Override record/revoke must keep active context and named policy consistent.
 
-### Status publication boundary
+### Team-status audience and publication boundary
 
-Internal `.memory-bank/project-status.md` is the execution-status authority. Its exact public grammar is `# Project Status`, `## Publishable`, then exactly one each of `### Progress`, `### Milestones`, `### Blockers`, `### Next Steps`, and `### Client Actions`; `## Internal` is never emitted. Unknown/malformed data is an error, not a fallback to publishing arbitrary internal prose.
+Internal `.memory-bank/project-status.md` is the execution-status authority. Its exact source grammar is `# Project Status`, `## Publishable`, then exactly one each of `### Progress`, `### Milestones`, `### Blockers`, `### Next Steps`, and `### Client Actions`; `## Internal` is never emitted. Publishable means approved for team readership, not public/client delivery. Unknown/malformed data is an error, not a fallback to publishing arbitrary internal prose.
 
-Generate only these explicitly selected public sections to top-level `project-status.md`. Sensitive-content checks are heuristic warnings, not a sanitization guarantee. Receipts/source hashes stay inside the bank. Failed generation preserves previous output and makes failure/staleness visible. `status --check` must not confuse generation time with source freshness. Agent edits run the generator before completion; manual editors invoke it themselves. No hook/watcher or external publication is implied.
+Generate only these explicitly selected sections to top-level `team-status.md`, headed `# Team Status`. Require detailed, organized, self-contained workstream context, scope/coverage, results, milestone status, known owners/dates, blocker impacts and resolution steps, prioritized next actions, and client dependencies. Use bold labels, nested bullets, and tables within the fixed sections; no extra source headings or code fences. State unknowns rather than inventing facts. Links must be team-accessible and relative to the root output; private bank links and opaque IDs cannot substitute for explanation. The reader must not need the bank even though generation uses its authoritative source.
+
+Sensitive-content checks are heuristic warnings, not a sanitization guarantee. Receipts/source hashes stay inside the bank. Failed generation preserves previous output and makes failure/staleness visible. `status --check` must not confuse generation time with source freshness. Agent edits run the generator before completion; manual editors invoke it themselves. Keep `--external-status` and `external_status` as the outside-bank output control, not client-delivery authorization. No hook/watcher or external publication is implied.
+
+On upgrade, remove legacy root `project-status.md` only when the previous receipt identifies it and its recorded output hash matches the file. Back it up in the same transaction that writes team status and its receipt; failure must restore the prior documents. Preserve edited/unrecognized legacy files with a warning and reject unrelated destination collisions. Read-only checks report migration needed without changing files. Do not rename the internal source or leave a managed alias at the old root filename.
 
 ## Findings workflow
 
@@ -122,7 +126,7 @@ Preserve these invariants:
 - Intake does not invoke AI, infer event time, identify findings/IOCs, or extend scope. Review status and checklist must agree independently of document section location.
 - Treat all evidence-derived browser values as hostile. Use safe DOM properties/text, not attribute/event-handler interpolation. Server-side size/record/field/query/pagination bounds remain enforced. API errors must not look like zero matches; seconds-bearing timestamp filters must remain valid.
 - Inventory counts do not establish exfiltration; responder downloads do not establish attacker phases. Unknown/unverified remains unknown/unverified.
-- `executiveSummary.json` is a derived internal analytical projection, not outward execution-status authority. The common status source remains canonical for execution status.
+- `executiveSummary.json` is a derived internal analytical projection, not team execution-status authority. The common status source remains canonical for execution status.
 - A local hash chain detects interior edits/reordering but cannot establish that the complete chain was never replaced/truncated. Do not claim independent immutability.
 
 When executive projection schema/validation changes, align `memory-bank-ir-evidence-review/SKILL.md`, dashboard `app.py`, and `scripts/sync_check.py`. Keep dashboard `SKILL.md` and `DASHBOARD.md` synchronized with deployment/CLI options, configuration, endpoints, and security defaults.
@@ -132,6 +136,8 @@ When executive projection schema/validation changes, align `memory-bank-ir-evide
 Exercise fresh, no-op, refresh, explicit migration, force, and dry-run behavior for all profiles. A directory collision is not a file-only match. Preserve populated cognitive files/scaffolds and user-owned real skill directories. Full package resources must remain installable after location changes.
 
 Migration inventories and backs up before cutover, merges legacy stores with provenance/custody intact, repairs paths, reports collisions and already-tracked private material, and leaves only the new live bank. Backups stay under `.memory-bank/backups/`. Content mapping belongs to the authorized maintenance workflow, not arbitrary shell text replacement. Never silently overwrite user conflicts or recursively load backup data into session memory.
+
+Legacy discovery-link migrations must work without `.memory-bank/layout.json`: the previous installer wrote only skill Markdown packages and relative Claude discovery links. Infer the old package location only during explicit migration of a recognized legacy installation, validating link shape, matching package frontmatter, and symlink-free project-local targets before any mutation. Reuse the recorded-package validation, replacement, and retirement flow; do not broadly trust links at default paths. Cover default/custom locations, direct Claude package transitions, dry-run preservation, backed-up owner edits, no-op refresh, and rejection of unrelated or unsafe targets.
 
 Remove only positively identified obsolete managed files/links and managed ignore entries. Preserve user CLAUDE content and explain native-fallback suppression; remove a known generated bridge without creating a new one. Never recommend deleting whole tool directories, all skill directories, or user instructions. `--force` backs up before managed overwrite, but is not semantic content migration or permission to delete unrelated files.
 
@@ -156,7 +162,7 @@ Then exercise actual temporary projects with **fictional non-sensitive fixtures*
 1. All four profile counts and shared directories; native AGENTS without bridge; complete skill packages and discovery links; findings/status defaults and explicit opt-ins.
 2. Fresh/no-op/refresh/migrate/force/dry-run behavior, schema and file/directory collisions, real skill-directory location changes, user CLAUDE preservation, tracked-private warnings, managed-only cleanup, backup/history/hash preservation, and absence of extra default ignored roots.
 3. Classified intake with pending/delete/archive/retain paths, hidden/nested items, failures, provenance, and missing IR prerequisite behavior; plan archival collisions/backlinks and persistent override/revocation authority.
-4. Status regeneration/check, internal-only content exclusion, malformed duplicate/missing headings, stale/failed receipts, previous-output retention, sensitive warnings without value disclosure, and no service calls.
+4. Team-status regeneration/check, legacy output migration with backups, ownership/collision handling, read-only migration checks, rollback of failed cutover, internal-only content exclusion, malformed duplicate/missing headings, stale/failed receipts, previous-output retention, sensitive warnings without value disclosure, and no service calls.
 5. Finding promotion from real source prose, log/backlink/header synchronization, default/provisional/IR selection, scored and informational CVSS, quoted/nested/missing assets, suspect content warnings, and genuine I/O errors.
 6. IR setup refresh preserving customizations; private/group modes; concurrent intake IDs; interrupted and empty-incoming recovery; digest mismatch quarantine; dry-run honesty; review queue consistency; validator schema agreement.
 7. Real authenticated dashboard requests/browser interaction for inert hostile strings, CSRF, traversal/symlink rejection, timestamp filtering, API-error display, bounded pagination/truncation, and no unsupported executive conclusions.

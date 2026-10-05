@@ -163,15 +163,18 @@ def mutation_lock(root):
         lock.unlink(missing_ok=True)
 
 
-def commit_documents(root, changes):
-    """Stage every document, retain rollback copies, then atomically replace each."""
+def commit_documents(root, changes, *, expected=None):
+    """Back up and replace documents transactionally; None requests deletion."""
     originals = {path: path.read_bytes() if path.exists() else None for path in changes}
+    if expected is not None and any(originals[path] != content for path, content in expected.items()):
+        raise WorkflowError("a workspace document changed during the operation; retry after reconciling edits")
     staged = {}
     backup = None
     committed = []
     try:
         for path, data in changes.items():
-            staged[path] = stage(root, path, data)
+            if data is not None:
+                staged[path] = stage(root, path, data)
         backups = safe_path(root, ".memory-bank/backups")
         secure_directory(root, backups)
         backup = Path(tempfile.mkdtemp(prefix="workflow-", dir=backups))
@@ -181,10 +184,13 @@ def commit_documents(root, changes):
             if content is not None:
                 atomic_write(root, backup / str(index), content)
         atomic_write(root, backup / "manifest.json", json_bytes({"files": manifest}))
-        for path, temporary in staged.items():
+        for path, data in changes.items():
             if (path.read_bytes() if path.exists() else None) != originals[path]:
                 raise WorkflowError("a workspace document changed during the operation; retry after reconciling edits")
-            os.replace(temporary, path)
+            if data is None:
+                path.unlink()
+            else:
+                os.replace(staged[path], path)
             committed.append(path)
     except BaseException:
         rollback_failed = False
@@ -244,7 +250,7 @@ def publication(source):
     section = None
     for number, line in enumerate(lines, 1):
         if position == len(expected):
-            # Structural public markers cannot be duplicated in the internal tail.
+            # Structural publishable markers cannot be duplicated in the internal tail.
             if line in expected:
                 raise WorkflowError("status grammar contains duplicate required headings")
             continue
@@ -258,14 +264,14 @@ def publication(source):
             position += 1
         elif section is not None:
             if line.lstrip().startswith(("#", "```", "~~~")):
-                raise WorkflowError("publishable status supports ordinary paragraphs and bullets, not headings or code fences")
+                raise WorkflowError("publishable status supports paragraphs, bullets and tables, not headings or code fences")
             selected[section].append(line)
             selected_lines.append((number, line))
         elif line.strip():
             raise WorkflowError("status text must be inside the named publishable sections or Internal")
     if position != len(expected) or any(not "\n".join(value).strip() for value in selected.values()):
         raise WorkflowError("status grammar is incomplete or contains an empty publishable section")
-    output = "# Project Status\n\n" + "\n\n".join("## " + section + "\n\n" + "\n".join(selected[section]).strip() for section in SECTIONS) + "\n"
+    output = "# Team Status\n\n" + "\n\n".join("## " + section + "\n\n" + "\n".join(selected[section]).strip() for section in SECTIONS) + "\n"
     warnings = []
     for number, line in selected_lines:
         for category, pattern in SENSITIVE:
@@ -276,9 +282,10 @@ def publication(source):
 
 def status_command(root, args, bank, external):
     if not external:
-        raise WorkflowError("outward status is disabled; enable --external-status with the installer before generation")
+        raise WorkflowError("team-facing status is disabled; enable --external-status with the installer before generation")
     source = safe_path(root, bank / "project-status.md")
-    target = safe_path(root, "project-status.md")
+    target = safe_path(root, "team-status.md")
+    legacy = safe_path(root, "project-status.md")
     receipt_path = safe_path(root, bank / "runtime/status-receipt.json")
     receipt = load_json(receipt_path, {})
     source_hash = None
@@ -290,18 +297,56 @@ def status_command(root, args, bank, external):
         except UnicodeError:
             raise WorkflowError("status source is not UTF-8") from None
         for warning in warnings:
-            print(f"warning: .memory-bank/project-status.md:{warning['line']}: {warning['category']}; review publishable content", file=sys.stderr)
+            print(f"warning: .memory-bank/project-status.md:{warning['line']}: {warning['category']}; review content approved for team readership", file=sys.stderr)
         output_hash = digest(rendered)
+        legacy_content = legacy.read_bytes() if legacy.is_file() else None
+        legacy_owned = (
+            receipt.get("schema") == 1
+            and receipt.get("output_path", legacy.name) == legacy.name
+            and legacy_content is not None
+            and digest(legacy_content) == receipt.get("output_sha256")
+        )
+        if legacy.exists() and not legacy_owned:
+            print("warning: root project-status.md is unrecognized or modified; preserved unchanged, not managed as team status.", file=sys.stderr)
+        target_content = target.read_bytes() if target.is_file() else None
+        target_managed = (
+            receipt.get("schema") == 1
+            and receipt.get("output_path") == target.name
+            and isinstance(receipt.get("output_sha256"), str)
+        )
+        collision = target.exists() and (not target_managed or not target.is_file())
         if args.check:
-            current = (receipt.get("state") == "generated" and receipt.get("source_sha256") == source_hash and receipt.get("output_sha256") == output_hash and target.is_file() and hash_file(target) == output_hash)
-            print("Status projection is current; heuristic warnings are not a sanitization guarantee." if current else "Status projection is stale or absent; run status to regenerate. Previous output is not certified current.")
+            if legacy_owned:
+                print("Legacy generated project-status.md needs migration to team-status.md; run status. Previous output is not certified current.")
+                if collision:
+                    print("warning: team-status.md destination collision; existing content must be reconciled before migration.", file=sys.stderr)
+                return 1
+            if collision:
+                print("Team status destination collision at team-status.md; existing content is not managed. Reconcile before running status.")
+                return 1
+            current = (
+                target_managed and receipt.get("state") == "generated"
+                and receipt.get("source_sha256") == source_hash
+                and receipt.get("output_sha256") == output_hash
+                and target_content == rendered
+            )
+            print("Team status is current; heuristic warnings are not a sanitization guarantee." if current else "Team status is stale or absent; run status to regenerate. Previous output is not certified current.")
             return 0 if current else 1
+        if collision:
+            raise WorkflowError("team-status.md destination collision; unrelated existing content retained; reconcile before running status")
         if source.read_bytes() != content:
             raise WorkflowError("status source changed during generation; previous output retained")
-        updated = {"schema": 1, "state": "generated", "source_sha256": source_hash, "output_sha256": output_hash, "generated_at": now(), "source_modified_at": datetime.fromtimestamp(source.stat().st_mtime, timezone.utc).isoformat(), "warnings": warnings}
-        # Both writes are staged first; failures restore the prior outward document.
-        commit_documents(root, {target: rendered, receipt_path: json_bytes(updated)})
-        print("Generated project-status.md from publishable fields only. No upload performed; review warnings before sharing.")
+        updated = {"schema": 1, "state": "generated", "output_path": target.name, "source_sha256": source_hash, "output_sha256": output_hash, "generated_at": now(), "source_modified_at": datetime.fromtimestamp(source.stat().st_mtime, timezone.utc).isoformat(), "warnings": warnings}
+        changes = {target: rendered, receipt_path: json_bytes(updated)}
+        expected = {target: target_content}
+        if legacy_owned:
+            # Delete only hash-proven legacy output, last, with its bytes backed up.
+            changes[legacy] = None
+            expected[legacy] = legacy_content
+        commit_documents(root, changes, expected=expected)
+        if legacy_owned:
+            print("Migrated generated project-status.md to team-status.md; prior bytes retained in .memory-bank/backups/workflow-*/.")
+        print("Generated team-status.md for teammates from approved publishable fields only. No upload performed; not a client-facing report or delivery approval.")
         return 0
     except (WorkflowError, OSError, ValueError) as error:
         if not args.check:
@@ -313,7 +358,7 @@ def status_command(root, args, bank, external):
                 pass
         if isinstance(error, WorkflowError):
             raise
-        raise WorkflowError("status generation failed; prior output retained; receipt or output may be stale") from None
+        raise WorkflowError("team status generation failed; prior output retained; receipt or output may be stale") from None
 
 
 def valid_date(value):
@@ -651,8 +696,8 @@ def make_parser():
     parser.add_argument("--root", help="Project root; defaults to git root or cwd")
     parser.add_argument("--profile", choices=tuple(PROFILES), help="Explicit profile when layout metadata is absent")
     commands = parser.add_subparsers(dest="command", required=True)
-    status = commands.add_parser("status", help="Generate the explicit publishable status projection")
-    status.add_argument("--check", action="store_true", help="Read-only staleness check; exit 1 when stale")
+    status = commands.add_parser("status", help="Generate team-status.md for teammates without memory-bank access")
+    status.add_argument("--check", action="store_true", help="Read-only freshness/migration check; exit 1 when stale or migration is needed")
     archive = commands.add_parser("archive-plan", help="Archive a completed plan and repair active references")
     archive.add_argument("path")
     archive.add_argument("--date", default=date.today().isoformat())

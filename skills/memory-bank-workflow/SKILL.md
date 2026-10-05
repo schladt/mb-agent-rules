@@ -1,6 +1,6 @@
 ---
 name: memory-bank-workflow
-description: Process explicitly classified incoming files, promote evidence-backed knowledge, archive completed plans, generate/check publishable project status, and record or revoke scoped project-policy overrides in a local .memory-bank.
+description: Process explicitly classified incoming files, promote evidence-backed knowledge, archive completed plans, generate/check standalone team status, and record or revoke scoped project-policy overrides in a local .memory-bank.
 ---
 
 # Memory Bank Workflow
@@ -27,8 +27,9 @@ paths are project-root-relative (absolute paths inside the same root also work).
 `--root` and optional `--profile pentest|incident-response|academic-research|general-project`
 go **before** the subcommand. `.memory-bank/layout.json` supplies the installed
 profile/features; without it pass `--profile` explicitly. A conflicting profile
-is an error, never an implicit domain switch. Research/general outward status
-requires the installer's `--external-status` option.
+is an error, never an implicit domain switch. Research/general team status
+requires the installer's `--external-status` option. That option and the
+`external_status` metadata mean output outside the memory bank, not client delivery.
 
 Commands are explicit local operations. They install no hook/watcher/daemon,
 contact no cloud service, upload nothing, and invoke no report compiler. Python
@@ -85,7 +86,7 @@ policy exceptions do not disable these integrity checks.
      citation keys and `literatureNotes.md`; this synthesis is not a replacement
      citation registry. Link to governed sources, not copied secret values.
    - `.memory-bank/project-status.md`: actual execution progress, blockers and
-     next steps only. Put externally appropriate statements explicitly in its
+     next steps only. Put statements approved for teammates explicitly in its
      Publishable fields; analytical/raw details stay Internal or referenced.
      Update the profile progress log with work actually performed and checks
      actually exercised. Do not invent a passed test or completed review.
@@ -143,11 +144,12 @@ explicit review and record progress. Do not claim the wrapper succeeded or
 bypass preservation to empty incoming. Analysis remains pending until the
 `memory-bank-ir-evidence-review` workflow actually completes it.
 
-## Deterministic publishable status
+## Deterministic team status
 
 The sole execution-status source is `.memory-bank/project-status.md`, using
 these exact, ordered headings once each, with nonempty ordinary Markdown in
-each publishable section:
+each publishable section. Do not add subheadings or code fences within Publishable;
+use bold workstream labels, nested bullets and tables for detail:
 
 ```markdown
 # Project Status
@@ -180,17 +182,49 @@ python3 .agents/skills/memory-bank-workflow/scripts/workspace.py --root . status
 python3 .agents/skills/memory-bank-workflow/scripts/workspace.py --root . status --check
 ```
 
-Only the five publishable sections become root `project-status.md`, with their
-headings promoted to level 2. Internal notes, metadata, source hashes, timestamps
-and the word Publishable are not copied into that projection. Identical public
-input produces identical output bytes; internal-only changes still make the
-receipt stale until regeneration. No full-document/redaction fallback exists.
-Unknown/duplicate/missing public headings, empty fields or I/O failures are real
+Only the five publishable sections become root `team-status.md`, headed
+`# Team Status`, with their headings promoted to level 2. This is detailed team
+coordination for teammates without memory-bank access, not a client-facing report.
+Publishable means approved for team readership, not public/client delivery permission.
+Client-facing reports/exports belong in `deliverables/`; client updates belong in
+the project's separate client update file, not this generated artifact.
+
+Write each update to stand alone: explain context and scope/coverage, organize
+workstreams and concrete results, record milestones and known owners/dates,
+describe blocker impacts and unblocking steps, prioritize actionable next steps,
+and state client dependencies. Explain what references mean; private links, raw
+evidence and opaque IDs must never be the sole explanation. Mark unknowns explicitly
+and never invent completion, certainty, owners or dates. Dates must describe sourced
+facts, not generator timestamps. Keep scaffold instructions in Internal, not in the
+five team-facing sections.
+Describe results/context in prose even when supplying links. Links must be
+team-accessible and resolve relative to root `team-status.md`, not the bank source.
+Do not require `.memory-bank/` links or artifact IDs as context: generation depends
+on the private authority; readership does not.
+
+The source and receipt remain private. Internal notes, metadata, source hashes,
+generator timestamps and the word Publishable are not copied into the projection.
+Dates authored as status facts remain content. Identical approved section content
+produces identical output bytes; internal-only changes still make the receipt stale
+until regeneration. No full-document/redaction fallback exists.
+Unknown/duplicate/missing publishable headings, empty fields or I/O failures are real
 errors; retain the prior output, mark/disclose the failed attempt in internal
 `.memory-bank/runtime/status-receipt.json` where writable, and do not call the
 old projection current. Receipts distinguish generation time, source filesystem
 modification time, full source hash and output hash; neither timestamp certifies
 that the underlying work was recently reviewed.
+
+On upgrade, run `status` to generate `team-status.md`; do not rename the internal
+source or change `--external-status` / `external_status`. Schema-1 receipts now
+record `output_path: "team-status.md"`. The legacy root `project-status.md` is
+archived and removed transactionally only when a schema-1 receipt has no
+`output_path` or names that legacy root path and the file's bytes match its
+`output_sha256`; a failed prior receipt can still establish that ownership.
+A modified or unrecognized legacy file is preserved with a warning. An unrelated
+existing `team-status.md` is a collision: generation fails rather than overwrites
+it. `status --check` remains read-only and returns `1` for pending migration or
+destination collision; resolve ownership without discarding user content before
+regenerating.
 
 Credential, email/PII, network-address and internal-store indicators produce
 **warning-only**, line/category diagnostics without reproducing suspected

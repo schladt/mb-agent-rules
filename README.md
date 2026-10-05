@@ -9,7 +9,7 @@ In an installed target project:
 - **One instruction source:** native `AGENTS.md`, without a generated `CLAUDE.md` instruction bridge.
 - **One local internal workspace:** `.memory-bank/`, the sole project-managed ignored root. Tools in the same checkout share it; clones, other worktrees, and cloud agents do not automatically receive it.
 - **Explicit workflows:** read the profile's cognitive files, work, update the relevant memory, and report truthfully. Skills handle intake, planning, status, findings, and maintenance.
-- **Trackable outputs:** skills, finding Markdown/assets, actual `deliverables/`, and enabled outward status remain eligible for Git. Generation is not permission to commit or publish.
+- **Trackable outputs:** skills, finding Markdown/assets, actual `deliverables/`, and enabled `team-status.md` remain eligible for Git. Generation is not permission to commit or publish.
 
 ## Install and quick start
 
@@ -25,13 +25,13 @@ From the target project root:
 
 ```bash
 init-agent-rules general-project
-# Optional security findings and stakeholder-facing status:
+# Optional security findings and team-facing status:
 init-agent-rules general-project --findings --external-status
 ```
 
 Choose one profile:
 
-| Profile | Aliases | Findings by default | Outward status by default |
+| Profile | Aliases | Findings by default | Team status by default |
 |---|---|---|---|
 | `pentest` | `hardware-pentest`, `software-pentest` | Yes, vulnerability findings | Yes |
 | `academic-research` | `academic`, `research` | No | No |
@@ -44,7 +44,7 @@ Installer options:
 |---|---|
 | `--migrate` | Explicit preservation-first migration of an existing layout; inspect a dry-run first. |
 | `--findings` | Opt general projects into the security-finding workflow; pentest/IR already enable it. Not supported for `academic-research`, which retains research-specific records and outputs. |
-| `--external-status` | Enable the outward status projection for research/general. |
+| `--external-status` | Enable root `team-status.md` for research/general. “External” means outside the memory bank, not client-facing. |
 | `--skills-dir=PATH` | Install complete skill packages at a project-relative location; default `.agents/skills`. Repeat this option on refresh for a custom location; recorded metadata does not replace the default. |
 | `--no-skill` | Skip skill installation; instructions and memory can still be used, but bundled workflow commands require their scripts to be provisioned separately. |
 | `--dry-run` | Preview without changing files. |
@@ -53,6 +53,8 @@ Installer options:
 Normal refresh preserves populated memory and user content. Schema/layout changes require the migration flow rather than silently creating a second live bank. Conflicting user-owned files need a disposition; `--force` is not a general authorization to remove unrelated files.
 
 Installation preflight rejects symlinked discovery ancestors and unrelated skill links before changing the target. A link is not installer-owned merely because it occupies a default package path; bundled-source links and independently recorded managed-package transitions remain supported.
+
+During `--migrate`, an existing `memory-bank/` and legacy profile `AGENTS.md` also permit recognition of the previous installer's `.claude/skills/<name> -> ../../<skills-dir>/<name>` discovery links without `layout.json`. Targets must be real project-local packages with matching `SKILL.md` frontmatter names and no symlinked path components. Recognized packages must share one location outside the stores being moved. Default and custom legacy locations are supported; pass `--skills-dir` to retain a custom location, or omit it to move to `.agents/skills`. Replaced skill files are backed up, and packages retired by a location change are archived under `.memory-bank/backups/`. Do not delete valid legacy discovery links before migration.
 
 ## Installed layout
 
@@ -78,7 +80,7 @@ your-project/
 │   └── runtime/
 ├── findings/                      # when enabled: README + _TEMPLATE + workstream/slug
 ├── deliverables/                  # actual reports, exports, and archives
-└── project-status.md              # when enabled: publishable projection only
+└── team-status.md                 # when enabled: self-contained team coordination
 ```
 
 There is **no `private/` intermediate directory**, duplicate private deliverables location, or second live `memory-bank/`. The bank is both cognitive memory and internal storage, but context loading uses explicit cognitive-file lists: it does not recursively read incoming, raw data, artifacts, runtime, or backups. Migration may inventory, hash, and copy raw bytes without loading their contents into session memory.
@@ -172,7 +174,9 @@ override revoke --id SLUG --reason TEXT --confirmed-by TEXT [--date YYYY-MM-DD] 
 
 Pass these subcommands after `python3 .agents/skills/memory-bank-workflow/scripts/workspace.py --root .`. An optional global `--profile SLUG` supplies the domain when metadata is absent. Neither a record nor a confirmation bypasses actual runtime permission or integrity checks.
 
-### Internal and outward status
+### Internal source and team-facing status
+
+Root **`team-status.md`** is for teammates who do **not** have memory-bank access. It is not a client report or client update: client-facing reports/exports belong in `deliverables/`, and client communications belong in the project's separate client update file. The private source remains `.memory-bank/project-status.md`; generation uses it, but reading the team document must not require it.
 
 The source `.memory-bank/project-status.md` has this explicit publication grammar:
 
@@ -193,9 +197,21 @@ The source `.memory-bank/project-status.md` has this explicit publication gramma
 Private working notes stay here.
 ```
 
-Only the five publishable sections flow to root `project-status.md`. Required headings occur exactly once. This is positive selection, not arbitrary-prose redaction; do not place raw evidence, TTPs, secrets, or unapproved details in publishable fields. Heuristic warnings cannot prove sanitization.
+Only the five `Publishable` sections flow to root `team-status.md`, headed `# Team Status`. Here “publishable” means approved for team readership, not approved for public or client delivery. Required source headings occur exactly once; organize detail within them using bold workstream labels, nested bullets, and tables rather than extra headings or code fences. This is positive selection, not arbitrary-prose redaction; do not place raw evidence, TTPs, secrets, or unapproved details in these fields. Heuristic warnings cannot prove sanitization.
 
-When outward status is enabled, run `status` after every agent edit to the source; manual editors run it explicitly. `status --check` detects stale/missing projection state without substituting generation time for source freshness. Internal source-hash receipts stay inside the bank. Malformed generation preserves the previous output and reports failure/staleness, not a supposedly safe current fallback. There is no watcher, host hook, background sync, upload, or guarantee of automatic regeneration after arbitrary manual edits. Local generation is not external publication authorization.
+Write a detailed coordination update, not a terse pointer into private notes:
+
+- **Progress:** establish project context and scope, then describe workstreams, work completed, concrete results, coverage, and remaining gaps.
+- **Milestones:** show deliverable/checkpoint status, known owners, and source-backed dates or target dates.
+- **Blockers:** explain the problem, its impact, who can unblock it, and the next resolution step.
+- **Next Steps:** prioritize specific actions with known owners, dependencies, and dates.
+- **Client Actions:** describe requests or dependencies the team is tracking with the client; this is not a client-facing message.
+
+State unknown owners, dates, and outcomes explicitly; do not manufacture completion or certainty. Explain results and references in ordinary language. Use only team-accessible links, resolved relative to root `team-status.md`; private memory-bank links, raw evidence, or unexplained IDs must not be required to understand the update. The generator selects prose, not facts: substantive synthesis belongs in the source fields.
+
+When team status is enabled, run `status` after every agent edit to the source; manual editors run it explicitly. `status --check` detects stale/missing output without substituting generation time for source freshness. Internal source-hash receipts stay inside the bank. Malformed generation preserves the previous output and reports failure/staleness, not a supposedly safe current fallback. There is no watcher, host hook, background sync, upload, or guarantee of automatic regeneration after arbitrary manual edits. Local generation is not external publication authorization.
+
+Existing installs switch on the next status generation or installer refresh. A legacy root `project-status.md` is backed up and removed in the same generation transaction only when its bytes match the previous output hash in the status receipt. Modified or unrecognized legacy files remain with a warning; an unrelated existing `team-status.md` blocks generation rather than being overwritten. `status --check` is read-only and reports a managed legacy output as needing migration. The private source filename and `--external-status`/`external_status` option and metadata names are unchanged.
 
 ## Tool-neutral findings and deliverables
 
@@ -262,7 +278,7 @@ python3 scripts/sync_check.py --json
 
 Intake serializes IDs and metadata, copies and re-hashes artifacts, records custody and review queue entries, and uses a recovery journal. Remove a source only after verified committed preservation; mismatches preserve the source and quarantine the copy. Dry-run is not stored-copy verification. The artifact store's hash-chained custody manifest detects interior modification/reordering, but a local chain cannot prove it was not wholly replaced or truncated; stronger assurance needs an authorized independent anchor.
 
-No automatic AI analysis occurs. The evidence-review skill explicitly performs analysis, using artifact event times rather than ingest times. Untrusted evidence stays inert in the browser; bounded event queries report truncation and API failures honestly. `sync_check.py` checks readiness, custody, permissions, references, review state, and executive projection consistency. The internal `executiveSummary.json` is analytical presentation, not the outward-status source; inventory counts and responder downloads do not prove exfiltration or attacker phases.
+No automatic AI analysis occurs. The evidence-review skill explicitly performs analysis, using artifact event times rather than ingest times. Untrusted evidence stays inert in the browser; bounded event queries report truncation and API failures honestly. `sync_check.py` checks readiness, custody, permissions, references, review state, and executive projection consistency. The internal `executiveSummary.json` is analytical presentation, not the team-status source; inventory counts and responder downloads do not prove exfiltration or attacker phases.
 
 See [dashboard operator documentation](skills/memory-bank-ir-dashboard/DASHBOARD.md) and its [skill](skills/memory-bank-ir-dashboard/SKILL.md) for configuration and deployment details.
 
@@ -286,7 +302,7 @@ The ignored bank is local to a checkout. Fresh clones/worktrees/cloud sessions n
 
 ## Completion contract and Git freshness limits
 
-Changes anywhere in the project—including assets, incoming dispositions, references, archived plans, outward status, and deliverables—require appropriate memory updates. Memory-only work counts as an update without recursive bookkeeping forever. Read-only work does not fabricate a write. Every response uses the installed profile's truthful status contract, for example:
+Changes anywhere in the project—including assets, incoming dispositions, references, archived plans, team status, and deliverables—require appropriate memory updates. Memory-only work counts as an update without recursive bookkeeping forever. Read-only work does not fabricate a write. Every response uses the installed profile's truthful status contract, for example:
 
 ```text
 Memory bank: updated — activeContext.md, progress.md

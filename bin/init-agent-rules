@@ -288,6 +288,8 @@ class Installer:
             # not the selected package destination. Check ancestors before reads
             # or any installation/migration writes.
             safe_destination(self.root, self.root / ".claude/skills")
+            if self.args.migrate and self.legacy_install and self.oldbank.is_dir() and not self.record:
+                self.record = self.legacy_skill_record()
             previous_dir = self.record.get("skills_dir")
             if previous_dir:
                 safe_destination(self.root, self.root / previous_dir)
@@ -391,6 +393,38 @@ class Installer:
                     directory=True, code_paths=path.is_relative_to(self.bank))
             if updated != original:
                 self.write(path, updated, mode=0o600 if path.is_relative_to(self.bank) else 0o644, backup=True)
+
+    def legacy_skill_record(self):
+        """Recover the old installer's package location from its discovery links."""
+        record = {}
+        for name in ("memory-bank-context", "memory-bank-maintenance", "memory-bank-ir-evidence-review"):
+            link = self.root / ".claude/skills" / name
+            if not link.is_symlink():
+                continue
+            target = Path(os.readlink(link))
+            # The legacy installer emitted ../../<skills-dir>/<name>, never an
+            # absolute target. Do not infer ownership from the link name alone.
+            if target.parts[:2] != ("..", "..") or len(target.parts) < 4:
+                continue
+            relative = Path(*target.parts[2:])
+            if ".." in relative.parts or relative.name != name:
+                continue
+            package = self.root / relative
+            safe_destination(self.root, package / "SKILL.md")
+            if not package.is_dir() or not (package / "SKILL.md").is_file():
+                continue
+            header, separator, _ = (package / "SKILL.md").read_text(encoding="utf-8").partition("\n---\n")
+            if not (header.startswith("---\n") and separator and
+                    re.search(rf"(?m)^name: {re.escape(name)}\s*$", header)):
+                continue
+            if any(package.is_relative_to(src) for src, _ in self.moves):
+                raise InstallError(f"Legacy skill package is inside a migrating store: {package}; relocate it before migration")
+            previous_dir = relative.parent.as_posix()
+            if record and record["skills_dir"] != previous_dir:
+                raise InstallError("Legacy skill discovery links identify different package directories; reconcile before migration")
+            record["skills_dir"] = previous_dir
+            record.setdefault("skill_packages", []).append(name)
+        return record
 
     def validate_skill_link(self, name, dest):
         if not dest.is_symlink():
@@ -595,12 +629,16 @@ class Installer:
             command = self.source / "skills/memory-bank-workflow/scripts/workspace.py"
             invocation = [sys.executable, "-B", str(command), "--root", str(self.root), "status"]
             if self.args.dry_run:
-                self.say("check/generate external project-status.md from explicit publishable fields")
-            elif subprocess.run([*invocation, "--check"], capture_output=True).returncode:
-                self.changed = True
-                self.say("generate external project-status.md from explicit publishable fields")
-                if subprocess.run(invocation).returncode:
-                    raise InstallError("Installation preserved; status generation failed. Resolve the internal status schema and rerun status.")
+                self.say("check/generate team-status.md for teammates from approved publishable fields")
+            else:
+                checked = subprocess.run([*invocation, "--check"], capture_output=True, text=True)
+                if checked.returncode:
+                    self.changed = True
+                    self.say("generate team-status.md for teammates from approved publishable fields")
+                    if subprocess.run(invocation).returncode:
+                        raise InstallError("Installation preserved; team status generation failed. Resolve the reported source or output conflict and rerun status.")
+                elif checked.stderr:
+                    sys.stderr.write(checked.stderr)
         self.say("Installation complete." if self.changed else "Nothing to do. Existing workspace matches.")
         if self.moves:
             self.say("Historical paths are recorded in .memory-bank/path-migrations.json; review reference links and the appended migration ledger. Acquired bytes and original cognitive snapshots were preserved.")
@@ -615,7 +653,7 @@ def main():
     parser.add_argument("--skills-dir", help="project-relative skill destination (default .agents/skills)")
     parser.add_argument("--no-skill", action="store_true", help="skip installing portable skill packages")
     parser.add_argument("--findings", action="store_true", help="enable optional security finding conventions")
-    parser.add_argument("--external-status", action="store_true", help="enable outward status for research/general profiles")
+    parser.add_argument("--external-status", action="store_true", help="enable team-status.md outside the memory bank for research/general profiles; not client-facing")
     args = parser.parse_args()
     try:
         Installer(args).install()

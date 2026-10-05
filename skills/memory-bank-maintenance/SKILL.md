@@ -43,13 +43,44 @@ intake, plan archives, status and scoped overrides use `memory-bank-workflow`.
 4. Preserve the flattened workspace: `.memory-bank/planning/archive/`, incoming,
    references/reference.md, references/datasets, references/raw, sensitive,
    artifacts, backups and runtime are direct bank paths, not a private subtree.
-   Keep actual outputs only in root `deliverables/`; enabled findings/assets and
-   outward project-status remain outside the ignored bank and Git-eligible.
+   Keep client-facing reports/exports in root `deliverables/` and client updates
+   in the project's separate client update file. Enabled findings/assets and root
+   `team-status.md` remain outside the ignored bank and Git-eligible; team status
+   is not a client-facing artifact.
 5. Record initialization and actual verification in progress and activeContext.
-   All four profiles require internal project-status. Use its exact Publishable
-   headings Progress, Milestones, Blockers, Next Steps, Client Actions, followed
-   by Internal. Run workflow status after source changes if outward status is
-   enabled; disclose stale/failed generation without overwriting valid output.
+   All four profiles require private `.memory-bank/project-status.md`, headed
+   `# Project Status`, then `## Publishable`, exactly five `###` headings in order:
+   Progress, Milestones, Blockers, Next Steps, Client Actions, then `## Internal`.
+   Keep each of the five sections nonempty, with no subheadings or code fences.
+   Publishable means approved for team readership, not public/client permission.
+   Use bold workstream labels, nested bullets or tables for substantive updates:
+   context and scope/coverage, work/results, milestones, known owners/dates,
+   blocker impacts and unblocking steps, prioritized actionable next steps and
+   client dependencies. Make them understandable without bank access; private
+   links, raw evidence and opaque IDs cannot be the sole explanation. State unknowns
+   explicitly; never invent completion, certainty, owners or dates. Dates describe
+   sourced facts, not generator timestamps. Keep scaffold guidance in Internal.
+   Run workflow status after source changes if team output is enabled; disclose
+   stale/failed generation without overwriting valid output. Root `team-status.md`
+   is headed `# Team Status`; the source and receipt remain private. The
+   `--external-status` option and `external_status` metadata mean team output
+   outside the bank. Warnings do not prove sanitization; generation never grants
+   staging, commit or external delivery permission.
+   Describe results/context in prose even when supplying links. Links must be
+   team-accessible and resolve relative to root `team-status.md`, not the bank
+   source. Do not require `.memory-bank/` links or artifact IDs as context:
+   generation depends on the private authority; readership does not.
+
+For existing installations, run workflow `status` for the root-output cutover;
+keep `.memory-bank/project-status.md`, `--external-status` and `external_status`
+unchanged. The new schema-1 receipt records `output_path: "team-status.md"`.
+Legacy root `project-status.md` is archived and removed transactionally only when
+a schema-1 receipt's `output_path` is absent or names the legacy root path and
+its `output_sha256` matches the actual bytes, including receipts for failed prior
+generation. Modified/unrecognized legacy content stays in place with a warning.
+An unrelated `team-status.md` blocks generation rather than being overwritten.
+Read-only `status --check` returns `1` for pending migration or destination
+collision. Preserve user content when resolving either case.
 
 ## Preservation-Aware Migration
 

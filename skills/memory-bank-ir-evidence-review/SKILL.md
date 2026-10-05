@@ -162,6 +162,27 @@ is the investigative handoff, not a second execution-status authority. When
 outward status is enabled, run the shared workflow `status` command and disclose
 generation errors/staleness without replacing prior valid output or uploading it.
 
+That projection is root `team-status.md`, headed `# Team Status`, for teammates
+without memory-bank access, not client-facing reporting. Client-facing reports/
+exports belong in `deliverables/` and client updates in the project's separate
+client update file. `--external-status` and `external_status` mean team output
+outside the bank. Publishable means approved for team readership, not public or
+client delivery permission; the internal source and receipt stay private.
+
+Preserve the source's `# Project Status`, `## Publishable`, ordered five `###`
+sections Progress, Milestones, Blockers, Next Steps, Client Actions, then
+`## Internal`. Keep sections nonempty; no extra subheadings or code fences in
+Publishable. Use bold workstream labels with nested bullets or tables to provide
+substantive context/scope and coverage, organized work/results, milestones and
+known owners/dates, blocker impacts/unblocking steps, prioritized actionable next
+steps and client dependencies. Unknowns must be explicit; never fabricate
+completion, certainty, owners or dates. Dates describe sourced facts, not generator
+timestamps. Describe results and context in prose even when supplying a link.
+Links must be team-accessible and resolve relative to root `team-status.md`,
+not the bank source. Do not require `.memory-bank/` links, raw evidence or opaque
+artifact IDs to understand an update. Generation depends on the private authority;
+readership does not. Warnings do not prove sanitization or grant sharing permission.
+
 ### Step 7 — Executive Summary
 
 Regenerate `.memory-bank/executiveSummary.json`. This replaceable JSON file is a

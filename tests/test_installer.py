@@ -130,6 +130,141 @@ class InstallerTests(WorkspaceCase):
         self.assertEqual(before, sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*")))
         self.assertEqual("existing", (self.root / "memory-bank/activeContext.md").read_text())
 
+    def test_refresh_migrates_generated_status_without_changing_internal_source(self):
+        self.assert_ok(self.command(INSTALL, "pentest"))
+        team = self.root / "team-status.md"
+        legacy = self.root / "project-status.md"
+        old_output = team.read_bytes().replace(b"# Team Status\n", b"# Project Status\n", 1)
+        team.unlink()
+        legacy.write_bytes(old_output)
+        receipt_path = self.root / ".memory-bank/runtime/status-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt.pop("output_path", None)
+        receipt["output_sha256"] = hashlib.sha256(old_output).hexdigest()
+        receipt_path.write_text(json.dumps(receipt))
+        source = self.root / ".memory-bank/project-status.md"
+        internal = source.read_bytes()
+        before = self.snapshot()
+        self.assert_ok(self.command(INSTALL, "pentest", "--dry-run"))
+        self.assertEqual(before, self.snapshot())
+        self.assert_ok(self.command(INSTALL, "pentest"))
+        self.assertFalse(legacy.exists())
+        self.assertEqual(internal, source.read_bytes())
+        command = self.root / ".agents/skills/memory-bank-workflow/scripts/workspace.py"
+        self.assert_ok(self.command(command, "--root", str(self.root), "status", "--check"))
+        after = self.snapshot()
+        self.assert_ok(self.command(INSTALL, "pentest"))
+        self.assertEqual(after, self.snapshot())
+
+    def test_legacy_discovery_links_migrate_without_layout_metadata(self):
+        cases = (
+            ("pentest", "Pentest", ".agents/skills", ".agents/skills"),
+            ("incident-response", "Incident Response", "custom/skills", ".agents/skills"),
+            ("general-project", "General Project", ".agents/skills", ".claude/skills"),
+            ("academic-research", "Academic Research", "custom/skills", "custom/skills"),
+        )
+        base = self.root
+        for profile, title, previous_dir, skills_dir in cases:
+            with self.subTest(profile=profile, previous_dir=previous_dir, skills_dir=skills_dir):
+                self.root = base / profile
+                self.root.mkdir()
+                self.put("AGENTS.md", f"# {title} Memory Bank Instructions\n")
+                context = "# Active Context\n\nOwner's historical notes.\n"
+                self.put("memory-bank/activeContext.md", context)
+                names = ["memory-bank-context", "memory-bank-maintenance"]
+                if profile == "incident-response":
+                    names.append("memory-bank-ir-evidence-review")
+                originals = {}
+                for name in names:
+                    text = f"---\nname: {name}\ndescription: Legacy skill\n---\n\nOwner customization.\n"
+                    originals[name] = text
+                    self.put(f"{previous_dir}/{name}/SKILL.md", text)
+                    self.put(f"{previous_dir}/{name}/owner.txt", "Retain this extra file.\n")
+                    link = self.root / ".claude/skills" / name
+                    link.parent.mkdir(parents=True, exist_ok=True)
+                    link.symlink_to(f"../../{previous_dir}/{name}", target_is_directory=True)
+                self.put(".claude/skills/owner-skill/SKILL.md", "# Unrelated skill\n")
+                before = self.snapshot()
+                args = (profile, "--migrate", "--skills-dir", skills_dir)
+                self.assert_ok(self.command(INSTALL, *args, "--dry-run"))
+                self.assertEqual(before, self.snapshot())
+                self.assert_ok(self.command(INSTALL, *args))
+                self.assertFalse((self.root / "memory-bank").exists())
+                self.assertIn(context, (self.root / ".memory-bank/activeContext.md").read_text())
+                for name in names:
+                    package = self.root / skills_dir / name
+                    self.assertTrue(package.is_dir())
+                    self.assertFalse(package.is_symlink())
+                    link = self.root / ".claude/skills" / name
+                    self.assertEqual(package, link.resolve())
+                    self.assertEqual(skills_dir != ".claude/skills", link.is_symlink())
+                    if previous_dir == skills_dir:
+                        backups = list((self.root / ".memory-bank/backups").glob(
+                            f"*/replaced/{previous_dir}/{name}/SKILL.md"))
+                        self.assertEqual("Retain this extra file.\n", (package / "owner.txt").read_text())
+                    else:
+                        self.assertFalse((self.root / previous_dir / name).exists())
+                        backups = list((self.root / ".memory-bank/backups").glob(
+                            f"*/retired-skills/{previous_dir}/{name}/SKILL.md"))
+                        self.assertEqual(["Retain this extra file.\n"],
+                                         [(p.parent / "owner.txt").read_text() for p in backups])
+                    self.assertEqual([originals[name]], [p.read_text() for p in backups])
+                self.assertEqual("# Unrelated skill\n",
+                                 (self.root / ".claude/skills/owner-skill/SKILL.md").read_text())
+                after = self.snapshot()
+                self.assert_ok(self.command(INSTALL, profile, "--skills-dir", skills_dir))
+                self.assertEqual(after, self.snapshot())
+
+    def test_legacy_migration_does_not_adopt_unidentified_or_unsafe_links(self):
+        base = self.root
+        for case in ("absolute", "traversal", "package-link", "ancestor-link", "skill-file-link",
+                     "wrong-name", "missing-frontmatter", "dangling", "unmanaged-project", "no-bank",
+                     "migrating-package", "mixed-directories"):
+            with self.subTest(case=case):
+                self.root = base / case
+                self.root.mkdir()
+                self.put("AGENTS.md", "# General Project Memory Bank Instructions\n"
+                         if case != "unmanaged-project" else "# Owner instructions\n")
+                if case != "no-bank":
+                    self.put("memory-bank/activeContext.md", "# Historical notes\n")
+                name = "memory-bank-context"
+                package = self.root / ".agents/skills" / name
+                text = f"---\nname: {name}\n---\nLegacy skill.\n"
+                self.put(f".agents/skills/{name}/SKILL.md", text)
+                link = self.root / ".claude/skills" / name
+                link.parent.mkdir(parents=True)
+                target = f"../../.agents/skills/{name}"
+                if case == "absolute":
+                    target = str(package)
+                elif case == "traversal":
+                    target = f"../../.agents/../.agents/skills/{name}"
+                elif case in ("package-link", "ancestor-link", "skill-file-link"):
+                    path = {"package-link": package, "ancestor-link": package.parent,
+                            "skill-file-link": package / "SKILL.md"}[case]
+                    moved = self.root / "owner-data"
+                    path.rename(moved)
+                    path.symlink_to(moved, target_is_directory=case != "skill-file-link")
+                elif case == "wrong-name":
+                    self.put(f".agents/skills/{name}/SKILL.md", "---\nname: owner-skill\n---\n")
+                elif case == "missing-frontmatter":
+                    self.put(f".agents/skills/{name}/SKILL.md", f"# Owner notes\nname: {name}\n")
+                elif case == "dangling":
+                    (package / "SKILL.md").unlink()
+                    package.rmdir()
+                elif case == "migrating-package":
+                    package.rename(self.root / "memory-bank" / name)
+                    target = f"../../memory-bank/{name}"
+                elif case == "mixed-directories":
+                    other = "memory-bank-maintenance"
+                    self.put(f"custom/skills/{other}/SKILL.md", f"---\nname: {other}\n---\n")
+                    (link.parent / other).symlink_to(f"../../custom/skills/{other}")
+                link.symlink_to(target, target_is_directory=True)
+                before = self.snapshot()
+                for args in (("--migrate", "--dry-run"), ("--migrate",)):
+                    result = self.install(*args)
+                    self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                    self.assertEqual(before, self.snapshot())
+
     def test_outside_skill_destination_is_rejected_without_mutation(self):
         outside = Path(self.temp.name) / "outside"
         outside.mkdir()

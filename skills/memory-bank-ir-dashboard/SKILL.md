@@ -132,8 +132,30 @@ keyword-generated attack phase or inventory-to-exfiltration inference.
 Execution status is shown directly from `.memory-bank/project-status.md`, the
 single execution-status authority. The analytical JSON `status` member is
 retained as a schema-required investigative snapshot, not displayed as a competing
-execution source. The dashboard does not publish external `project-status.md`.
-Use the shared workflow’s `status` / `status --check` commands for that projection.
+execution source. The dashboard does not publish root `team-status.md`.
+Use the shared workflow’s `status` / `status --check` commands for that projection,
+headed `# Team Status`. It provides detailed coordination for teammates without
+memory-bank access, not client-facing reporting. Client-facing reports/exports
+belong in `deliverables/` and client updates in the project's separate client
+update file. `--external-status` and `external_status` mean team output outside the
+bank. Publishable means approved for team readership, not public/client permission;
+the source and receipt remain private.
+
+When editing execution status, preserve `# Project Status`, `## Publishable`,
+the five ordered `###` sections Progress, Milestones, Blockers, Next Steps,
+Client Actions, then `## Internal`. Keep sections nonempty, without extra
+subheadings or code fences in Publishable. Use bold workstream labels and nested
+bullets or tables for substantive standalone context/scope and coverage,
+work/results, milestones and known owners/dates, blocker impacts and unblocking
+steps, prioritized actionable next steps and client dependencies. State unknowns;
+never fabricate completion, certainty, owners or dates. Dates describe sourced facts,
+not generator timestamps. Describe results/context in prose even with links.
+Links must be team-accessible and resolve relative to root `team-status.md`, not
+the bank source; `.memory-bank/` links, raw evidence and opaque artifact IDs cannot
+be required context. Generation depends on the private authority; readership does
+not. Preserve warning-only privacy diagnostics and prior valid output on generation
+failure; disclose errors/staleness. Warnings do not prove sanitization or grant
+sharing permission.
 
 ## Atomic event viewer and checks
 

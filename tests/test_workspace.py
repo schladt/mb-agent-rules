@@ -77,20 +77,126 @@ class WorkspaceTests(unittest.TestCase):
             code = namespace["main"](["--root", str(self.root), *arguments])
         return code, stdout.getvalue(), stderr.getvalue()
 
-    def test_status_is_positive_selected_deterministic_and_check_is_read_only(self):
+    def legacy_status(self):
+        content = ("# Project Status\n\n" + "\n\n".join(
+            "## " + section + "\n\n- Previously reported work." for section in PUBLIC_SECTIONS
+        ) + "\n").encode()
+        (self.root / "project-status.md").write_bytes(content)
+        receipt = {
+            "schema": 1, "state": "generated",
+            "source_sha256": hashlib.sha256((self.bank / "project-status.md").read_bytes()).hexdigest(),
+            "output_sha256": hashlib.sha256(content).hexdigest(),
+        }
+        (self.bank / "runtime/status-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+        return content
+
+    def test_legacy_status_cutover_preserves_backup_and_uses_current_source(self):
+        legacy = self.legacy_status()
+        source = STATUS.replace("- Not yet reported.", "- Access review is complete; export review is next.", 1)
+        (self.bank / "project-status.md").write_text(source, encoding="utf-8")
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.cli("status", "--check", expected=1)
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes()
+                                  for p in self.root.rglob("*") if p.is_file()})
         self.cli("status")
-        output = (self.root / "project-status.md").read_bytes()
-        expected = "# Project Status\n\n" + "\n\n".join(
-            "## " + section + "\n\n- Not yet reported." for section in PUBLIC_SECTIONS
-        ) + "\n"
-        self.assertEqual(expected.encode(), output)
-        self.assertNotIn(b"Private", output)
+        self.assertFalse((self.root / "project-status.md").exists())
+        self.assertIn("Access review is complete", (self.root / "team-status.md").read_text())
+        self.assertEqual(source, (self.bank / "project-status.md").read_text())
+        preserved = []
+        for path in (self.bank / "backups").glob("workflow-*/manifest.json"):
+            for record in json.loads(path.read_text())["files"]:
+                if record["path"] == "project-status.md" and record["existed"]:
+                    preserved.append((path.parent / record["backup"]).read_bytes())
+        self.assertEqual([legacy], preserved)
+        self.cli("status", "--check")
+
+    def test_unowned_or_edited_legacy_status_is_not_removed(self):
+        legacy = self.legacy_status()
+        edited = legacy + b"\nOwner's manual addition.\n"
+        (self.root / "project-status.md").write_bytes(edited)
+        result = self.cli("status")
+        self.assertEqual(edited, (self.root / "project-status.md").read_bytes())
+        self.assertIn("warning:", result.stderr)
+        (self.root / "team-status.md").unlink()
+        (self.bank / "runtime/status-receipt.json").unlink()
+        result = self.cli("status")
+        self.assertEqual(edited, (self.root / "project-status.md").read_bytes())
+        self.assertIn("warning:", result.stderr)
+
+    def test_status_cutover_rejects_existing_team_document(self):
+        legacy = self.legacy_status()
+        owner = b"# Team notes\n\nOwner-managed coordination.\n"
+        (self.root / "team-status.md").write_bytes(owner)
+        self.cli("status", expected=2)
+        self.assertEqual(legacy, (self.root / "project-status.md").read_bytes())
+        self.assertEqual(owner, (self.root / "team-status.md").read_bytes())
+
+    def test_malformed_legacy_status_cutover_preserves_output_and_can_retry(self):
+        legacy = self.legacy_status()
+        (self.bank / "project-status.md").write_text("# Invalid source\n")
+        self.cli("status", expected=2)
+        self.assertEqual(legacy, (self.root / "project-status.md").read_bytes())
+        self.assertFalse((self.root / "team-status.md").exists())
+        (self.bank / "project-status.md").write_text(STATUS)
+        self.cli("status")
+        self.assertFalse((self.root / "project-status.md").exists())
+        self.cli("status", "--check")
+
+    def test_failed_legacy_status_cutover_restores_previous_document(self):
+        legacy = self.legacy_status()
+        namespace = load_workspace()
+        replace = namespace["os"].replace
+        receipt_path = self.bank / "runtime/status-receipt.json"
+        failed = False
+        def fail_receipt_once(source, destination):
+            nonlocal failed
+            if Path(destination) == receipt_path and not failed:
+                failed = True
+                raise OSError("synthetic receipt failure")
+            return replace(source, destination)
+        with mock.patch.object(namespace["os"], "replace", side_effect=fail_receipt_once):
+            code, _, _ = self.direct(namespace, "status")
+        self.assertEqual(2, code)
+        self.assertEqual(legacy, (self.root / "project-status.md").read_bytes())
+        self.assertFalse((self.root / "team-status.md").exists())
+        self.cli("status")
+        self.assertFalse((self.root / "project-status.md").exists())
+        self.cli("status", "--check")
+
+    def test_failed_legacy_removal_rolls_back_new_team_document(self):
+        legacy = self.legacy_status()
+        namespace = load_workspace()
+        unlink = Path.unlink
+        def fail_legacy_unlink(path, *args, **kwargs):
+            if path == self.root / "project-status.md":
+                raise OSError("synthetic legacy removal failure")
+            return unlink(path, *args, **kwargs)
+        with mock.patch.object(Path, "unlink", fail_legacy_unlink):
+            code, _, _ = self.direct(namespace, "status")
+        self.assertEqual(2, code)
+        self.assertEqual(legacy, (self.root / "project-status.md").read_bytes())
+        self.assertFalse((self.root / "team-status.md").exists())
+        self.cli("status")
+        self.assertFalse((self.root / "project-status.md").exists())
+        self.cli("status", "--check")
+
+    def test_status_is_positive_selected_deterministic_and_check_is_read_only(self):
+        progress = "- **Access review:** Completed the agreed role checks; export permissions remain blocked."
+        source = STATUS.replace("- Not yet reported.", progress, 1)
+        (self.bank / "project-status.md").write_text(source, encoding="utf-8")
+        self.cli("status")
+        output = (self.root / "team-status.md").read_bytes()
+        self.assertIn(progress.encode(), output)
+        self.assertNotIn(b"Private analytical notes", output)
+        self.assertNotIn(b"## Internal", output)
+        self.assertNotIn(b"## Publishable", output)
+        self.assertFalse((self.root / "project-status.md").exists())
         receipt_path = self.bank / "runtime/status-receipt.json"
         receipt_bytes = receipt_path.read_bytes()
         self.cli("status", "--check")
         self.assertEqual(receipt_bytes, receipt_path.read_bytes())
         self.cli("status")
-        self.assertEqual(output, (self.root / "project-status.md").read_bytes())
+        self.assertEqual(output, (self.root / "team-status.md").read_bytes())
         receipt = self.receipt("status-receipt.json")
         self.assertEqual(hashlib.sha256((self.bank / "project-status.md").read_bytes()).hexdigest(), receipt["source_sha256"])
         self.assertIn("generated_at", receipt)
@@ -116,22 +222,22 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotIn("person@example.test", result.stdout + result.stderr)
         self.assertNotIn("192.0.2.1", result.stdout + result.stderr)
         # Warnings are not a blocking redaction claim; the explicitly selected prose is unchanged.
-        self.assertIn(token, (self.root / "project-status.md").read_text(encoding="utf-8"))
+        self.assertIn(token, (self.root / "team-status.md").read_text(encoding="utf-8"))
 
     def test_internal_change_and_output_tampering_are_stale(self):
         self.cli("status")
-        old_output = (self.root / "project-status.md").read_bytes()
+        old_output = (self.root / "team-status.md").read_bytes()
         with (self.bank / "project-status.md").open("a", encoding="utf-8") as stream:
             stream.write("Another private note.\n")
         self.cli("status", "--check", expected=1)
         self.cli("status")
-        self.assertEqual(old_output, (self.root / "project-status.md").read_bytes())
-        (self.root / "project-status.md").write_text("tampered\n", encoding="utf-8")
+        self.assertEqual(old_output, (self.root / "team-status.md").read_bytes())
+        (self.root / "team-status.md").write_text("tampered\n", encoding="utf-8")
         self.cli("status", "--check", expected=1)
 
     def test_malformed_status_preserves_previous_output_and_failure_receipt(self):
         self.cli("status")
-        old_output = (self.root / "project-status.md").read_bytes()
+        old_output = (self.root / "team-status.md").read_bytes()
         old_hash = self.receipt("status-receipt.json")["output_sha256"]
         for malformed in (
             STATUS.replace("### Blockers", "### Unapproved secret heading"),
@@ -141,7 +247,7 @@ class WorkspaceTests(unittest.TestCase):
             with self.subTest(source=malformed[:20]):
                 (self.bank / "project-status.md").write_text(malformed, encoding="utf-8")
                 self.cli("status", expected=2)
-                self.assertEqual(old_output, (self.root / "project-status.md").read_bytes())
+                self.assertEqual(old_output, (self.root / "team-status.md").read_bytes())
                 receipt = self.receipt("status-receipt.json")
                 self.assertEqual("failed", receipt["state"])
                 self.assertEqual(old_hash, receipt["output_sha256"])
@@ -149,7 +255,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_failed_status_commit_restores_prior_output(self):
         self.cli("status")
-        previous = (self.root / "project-status.md").read_bytes()
+        previous = (self.root / "team-status.md").read_bytes()
         (self.bank / "project-status.md").write_text(STATUS.replace("Not yet reported.", "Real new progress.", 1), encoding="utf-8")
         namespace = load_workspace()
         replace = namespace["os"].replace
@@ -165,7 +271,7 @@ class WorkspaceTests(unittest.TestCase):
             code, stdout, stderr = self.direct(namespace, "status")
         self.assertEqual(2, code)
         self.assertNotIn("synthetic-write-failure-content-must-not-echo", stdout + stderr)
-        self.assertEqual(previous, (self.root / "project-status.md").read_bytes())
+        self.assertEqual(previous, (self.root / "team-status.md").read_bytes())
         self.assertEqual("failed", self.receipt("status-receipt.json")["state"])
         self.assertFalse((self.bank / "runtime/workspace.lock").exists())
 
@@ -173,7 +279,7 @@ class WorkspaceTests(unittest.TestCase):
         self.cli("status", "--check", expected=1)
         self.configure("general-project", external_status=False)
         self.cli("status", expected=2)
-        self.assertFalse((self.root / "project-status.md").exists())
+        self.assertFalse((self.root / "team-status.md").exists())
         self.configure("general-project", external_status=True)
         self.cli("status")
 
