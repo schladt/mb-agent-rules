@@ -1,640 +1,629 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-DEFAULT_AGENT_RULES_ROOT="$HOME/projects/mb-agent-rules"
-AGENT_RULES_ROOT="${AGENT_RULES_ROOT:-$DEFAULT_AGENT_RULES_ROOT}"
-FORCE=0
-DRY_RUN=0
-ALLOW_OVERWRITE=0
-PROJECT_TYPE=""
-CLAUDE_MODE="import"
-SKILLS_DIR=".agents/skills"
-INSTALL_SKILL=1
-
-usage() {
-  cat <<'USAGE'
-Usage:
-  init-agent-rules <project-type> [options]
-
-Project types:
-  pentest
-  academic-research
-  general-project
-  incident-response
-
-Aliases:
-  pentest: hardware-pentest, software-pentest
-  academic-research: academic, research
-  general-project: general, project
-  incident-response: incident, dfir, ir
-
-Run this command from the root of the target project. It initializes:
-  memory-bank/                    from the selected project type template
-  sensitive/                      private operational data (all profiles)
-  evidence/ and loot/             pentest-only sensitive stores
-  artifacts/                      incident-response evidence store
-  AGENTS.md                       universal agent instructions
-  CLAUDE.md                       pointer to AGENTS.md (for Claude Code)
-  .agents/skills/memory-bank-maintenance/
-                                   memory-bank lifecycle Agent Skill
-  .agents/skills/memory-bank-context/
-                                   read-only context-loading Agent Skill
-  .agents/skills/memory-bank-ir-evidence-review/
-                                   IR analysis skill (incident-response only)
-
-Options:
-  --claude-mode=MODE  how CLAUDE.md is written (default: import)
-                        import  one-line '@AGENTS.md' import; Claude Code
-                                expands it, other tools load almost nothing
-                        symlink CLAUDE.md -> AGENTS.md symlink
-                        copy    full duplicate of AGENTS.md (legacy; causes
-                                double-loading in tools that read both files)
-  --skills-dir=PATH   where to install Agent Skills (default: .agents/skills)
-  --no-skill          do not install Agent Skills
-  --dry-run           preview without writing
-  --force             overwrite all profile-managed files in place, with no
-                      backup and no migration prompt (power-user escape hatch)
-
-Existing installs are detected:
-  - Nothing exists yet            -> fresh scaffolding is created.
-  - Memory bank matches profile   -> nothing is changed.
-  - Same file schema, stale rules -> AGENTS.md / CLAUDE.md / the skills are
-                                     refreshed; memory-bank/ is left untouched.
-  - File schema does NOT match    -> the old memory bank is backed up to
-    (e.g. profile changed, or a      .old/memory-bank-<timestamp>/, fresh
-     newer profile added files)      scaffolding is created, and you are
-                                     told to ask your agent to migrate the
-                                     old data into the new files.
-
-Set AGENT_RULES_ROOT to override the source location:
-  AGENT_RULES_ROOT=/path/to/mb-agent-rules init-agent-rules general-project
-USAGE
-}
-
-die() {
-  printf 'error: %s\n' "$*" >&2
-  exit 1
-}
-
-log() {
-  printf '%s\n' "$*"
-}
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    --force)
-      FORCE=1
-      shift
-      ;;
-    --dry-run)
-      DRY_RUN=1
-      shift
-      ;;
-    --claude-mode=*)
-      CLAUDE_MODE="${1#*=}"
-      case "$CLAUDE_MODE" in
-        import|symlink|copy) ;;
-        *) die "invalid --claude-mode: $CLAUDE_MODE (expected import, symlink, or copy)" ;;
-      esac
-      shift
-      ;;
-    --skills-dir=*)
-      SKILLS_DIR="${1#*=}"
-      [ -n "$SKILLS_DIR" ] || die "--skills-dir requires a path"
-      shift
-      ;;
-    --no-skill)
-      INSTALL_SKILL=0
-      shift
-      ;;
-    -*)
-      die "unknown option: $1"
-      ;;
-    *)
-      if [ -n "$PROJECT_TYPE" ]; then
-        die "expected one project type, got extra argument: $1"
-      fi
-      PROJECT_TYPE="$1"
-      shift
-      ;;
-  esac
-done
-
-if [ -z "$PROJECT_TYPE" ]; then
-  usage >&2
-  exit 2
-fi
-
-case "$PROJECT_TYPE" in
-  pentest|hardware-pentest|software-pentest)
-    PROFILE="pentest"
-    TEMPLATE_DIR_NAME="pentest-memory-bank"
-    ;;
-  academic-research|academic|research)
-    PROFILE="academic-research"
-    TEMPLATE_DIR_NAME="academic-research-memory-bank"
-    ;;
-  incident-response|incident|dfir|ir)
-    PROFILE="incident-response"
-    TEMPLATE_DIR_NAME="incident-response-memory-bank"
-    ;;
-  general-project|general|project)
-    PROFILE="general-project"
-    TEMPLATE_DIR_NAME="general-project-memory-bank"
-    ;;
-  *)
-    die "unknown project type: $PROJECT_TYPE"
-    ;;
-esac
-
-TARGET_ROOT="$(pwd -P)"
-TEMPLATE_DIR="$AGENT_RULES_ROOT/templates/$TEMPLATE_DIR_NAME"
-INSTRUCTIONS_SRC="$AGENT_RULES_ROOT/instructions/AGENTS.${PROFILE}.md"
-MAINTENANCE_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-maintenance/SKILL.md"
-MAINTENANCE_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-maintenance/SKILL.md"
-CONTEXT_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-context/SKILL.md"
-CONTEXT_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-context/SKILL.md"
-IR_EVIDENCE_REVIEW_SKILL_SRC="$AGENT_RULES_ROOT/skills/memory-bank-ir-evidence-review/SKILL.md"
-IR_EVIDENCE_REVIEW_SKILL_DEST="$TARGET_ROOT/$SKILLS_DIR/memory-bank-ir-evidence-review/SKILL.md"
-
-# Skill directory names installed for this profile (order stable). Claude Code
-# is mirrored these names under .claude/skills/; LEGACY_SKILLS are pruned.
-INSTALLED_SKILLS=("memory-bank-maintenance" "memory-bank-context")
-if [ "$PROFILE" = "incident-response" ]; then
-  INSTALLED_SKILLS+=("memory-bank-ir-evidence-review")
-fi
-LEGACY_SKILLS=("memory-bank" "memory-bank-read-only" "evidence-review")
-TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
-
-SENSITIVE_STORE_DIRS=("sensitive")
-case "$PROFILE" in
-  pentest)
-    SENSITIVE_STORE_DIRS+=("evidence" "loot")
-    ;;
-  incident-response)
-    SENSITIVE_STORE_DIRS+=("artifacts")
-    ;;
-esac
-
-for required in "$TEMPLATE_DIR" "$INSTRUCTIONS_SRC"; do
-  [ -e "$required" ] || die "required source not found: $required"
-done
-
-if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$MAINTENANCE_SKILL_SRC" ]; then
-  die "required source not found: $MAINTENANCE_SKILL_SRC (use --no-skill to skip)"
-fi
-if [ "$INSTALL_SKILL" -eq 1 ] && [ ! -f "$CONTEXT_SKILL_SRC" ]; then
-  die "required source not found: $CONTEXT_SKILL_SRC (use --no-skill to skip)"
-fi
-
-if [ "$INSTALL_SKILL" -eq 1 ] && [ "$PROFILE" = "incident-response" ] && [ ! -f "$IR_EVIDENCE_REVIEW_SKILL_SRC" ]; then
-  die "required source not found: $IR_EVIDENCE_REVIEW_SKILL_SRC (use --no-skill to skip)"
-fi
-
-# Required memory-bank file names for this profile (the canonical schema).
-REQUIRED_FILES=()
-while IFS= read -r f; do
-  REQUIRED_FILES+=("$(basename "$f")")
-done < <(find "$TEMPLATE_DIR" -maxdepth 1 -name '*.md' -type f | sort)
-
-run_mkdir() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "mkdir -p ${1#$TARGET_ROOT/}"
-  else
-    mkdir -p "$1"
-  fi
-}
-
-# Emit the CLAUDE.md content for the current mode. Claude Code reads CLAUDE.md
-# and never AGENTS.md, so by default we point at AGENTS.md instead of copying it:
-# tools that read both files then load the instructions only once.
-expected_claude() {
-  if [ "$CLAUDE_MODE" = "copy" ]; then
-    printf '<!-- This file is identical to AGENTS.md. Edit AGENTS.md and re-run init-agent-rules to update both. -->\n\n'
-    cat "$INSTRUCTIONS_SRC"
-  else
-    printf '<!-- Claude Code reads CLAUDE.md, not AGENTS.md. The line below imports it so both read the same instructions. Edit AGENTS.md instead of this file. -->\n\n'
-    printf '@AGENTS.md\n'
-  fi
-}
-
-copy_file() {
-  local src="$1"
-  local dest="$2"
-  local existed=0
-
-  run_mkdir "$(dirname "$dest")"
-
-  [ -e "$dest" ] && existed=1
-
-  if [ "$existed" -eq 1 ] && [ "$FORCE" -ne 1 ] && [ "$ALLOW_OVERWRITE" -ne 1 ]; then
-    log "skip existing: ${dest#$TARGET_ROOT/}"
-    return 0
-  fi
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    if [ "$existed" -eq 1 ]; then
-      log "overwrite: ${dest#$TARGET_ROOT/} <- ${src#$AGENT_RULES_ROOT/}"
-    else
-      log "copy: ${dest#$TARGET_ROOT/} <- ${src#$AGENT_RULES_ROOT/}"
-    fi
-  else
-    cp "$src" "$dest"
-    if [ "$existed" -eq 1 ]; then
-      log "wrote: ${dest#$TARGET_ROOT/}"
-    else
-      log "created: ${dest#$TARGET_ROOT/}"
-    fi
-  fi
-}
-
-copy_template_dir() {
-  local template_dir="$1"
-  local dest_dir="$2"
-  local src rel
-
-  run_mkdir "$dest_dir"
-
-  while IFS= read -r -d '' src; do
-    rel="${src#$template_dir/}"
-    copy_file "$src" "$dest_dir/$rel"
-  done < <(find "$template_dir" -type f -print0 | sort -z)
-}
-
-install_claude() {
-  local dest="$1"
-  local existed=0
-
-  run_mkdir "$(dirname "$dest")"
-
-  { [ -e "$dest" ] || [ -L "$dest" ]; } && existed=1
-
-  if [ "$existed" -eq 1 ] && [ "$FORCE" -ne 1 ] && [ "$ALLOW_OVERWRITE" -ne 1 ]; then
-    log "skip existing: ${dest#$TARGET_ROOT/}"
-    return 0
-  fi
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "write: ${dest#$TARGET_ROOT/} ($CLAUDE_MODE of AGENTS.md)"
-    return 0
-  fi
-
-  rm -f "$dest"
-  if [ "$CLAUDE_MODE" = "symlink" ]; then
-    ln -s "AGENTS.md" "$dest"
-  else
-    expected_claude > "$dest"
-  fi
-
-  if [ "$existed" -eq 1 ]; then
-    log "wrote: ${dest#$TARGET_ROOT/} ($CLAUDE_MODE)"
-  else
-    log "created: ${dest#$TARGET_ROOT/} ($CLAUDE_MODE)"
-  fi
-}
-
-install_sensitive_stores() {
-  local store dest entry gitignore="$TARGET_ROOT/.gitignore"
-  local missing_ignores=()
-
-  for store in "${SENSITIVE_STORE_DIRS[@]}"; do
-    dest="$TARGET_ROOT/$store"
-    if [ -L "$dest" ] || { [ -e "$dest" ] && [ ! -d "$dest" ]; }; then
-      die "sensitive store path is not a real directory: ${dest#$TARGET_ROOT/}"
-    fi
-
-    if [ ! -d "$dest" ]; then
-      if [ "$DRY_RUN" -eq 1 ]; then
-        log "mkdir -m 0700 ${dest#$TARGET_ROOT/}"
-      else
-        mkdir -p "$dest"
-        chmod 0700 "$dest"
-        log "created private store: ${dest#$TARGET_ROOT/}"
-      fi
-    fi
-
-    entry="$store/"
-    if [ ! -f "$gitignore" ] || ! grep -qxF "$entry" "$gitignore"; then
-      missing_ignores+=("$entry")
-    fi
-  done
-
-  [ "${#missing_ignores[@]}" -gt 0 ] || return 0
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    for entry in "${missing_ignores[@]}"; do
-      log "append .gitignore: $entry"
-    done
-    return 0
-  fi
-
-  if [ -s "$gitignore" ]; then
-    printf '\n' >> "$gitignore"
-  fi
-  for entry in "${missing_ignores[@]}"; do
-    printf '%s\n' "$entry" >> "$gitignore"
-  done
-  log "updated: .gitignore (sensitive stores excluded by default)"
-}
-
-remove_legacy_skill() {
-  local name="$1"
-  local dest="$TARGET_ROOT/$SKILLS_DIR/$name"
-
-  { [ -L "$dest" ] || [ -f "$dest/SKILL.md" ]; } || return 0
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "remove legacy skill: ${dest#$TARGET_ROOT/}"
-    return 0
-  fi
-
-  if [ -L "$dest" ]; then
-    rm -f "$dest"
-  else
-    rm -f "$dest/SKILL.md"
-    rmdir "$dest" 2>/dev/null || true
-  fi
-  log "removed legacy skill: ${dest#$TARGET_ROOT/}"
-}
-
-install_skill() {
-  [ "$INSTALL_SKILL" -eq 1 ] || return 0
-  remove_legacy_skill "memory-bank"
-  remove_legacy_skill "memory-bank-read-only"
-  remove_legacy_skill "evidence-review"
-  copy_file "$MAINTENANCE_SKILL_SRC" "$MAINTENANCE_SKILL_DEST"
-  copy_file "$CONTEXT_SKILL_SRC" "$CONTEXT_SKILL_DEST"
-  if [ "$PROFILE" = "incident-response" ]; then
-    copy_file "$IR_EVIDENCE_REVIEW_SKILL_SRC" "$IR_EVIDENCE_REVIEW_SKILL_DEST"
-  fi
-  link_claude_skills
-}
-
-# Claude Code only scans .claude/skills/ (plus ~/.claude/skills and plugins), so
-# a skill installed under $SKILLS_DIR is invisible to it. When Claude Code is
-# present we want to mirror each skill there with a relative symlink.
-want_claude_links() {
-  [ "$INSTALL_SKILL" -eq 1 ] || return 1
-  case "$SKILLS_DIR" in
-    .claude/skills|.claude/skills/) return 1 ;;
-  esac
-  claude_code_present
-}
-
-# Create/refresh .claude/skills/<name> -> ../../$SKILLS_DIR/<name> symlinks and
-# prune links from earlier skill names. Idempotent; safe to re-run.
-link_claude_skills() {
-  want_claude_links || return 0
-
-  local links_dir="$TARGET_ROOT/.claude/skills"
-  local name dest target legacy
-
-  for legacy in "${LEGACY_SKILLS[@]}"; do
-    [ -L "$links_dir/$legacy" ] || continue
-    if [ "$DRY_RUN" -eq 1 ]; then
-      log "remove legacy claude link: .claude/skills/$legacy"
-    else
-      rm -f "$links_dir/$legacy"
-      log "removed legacy claude link: .claude/skills/$legacy"
-    fi
-  done
-
-  for name in "${INSTALLED_SKILLS[@]}"; do
-    dest="$links_dir/$name"
-    target="../../$SKILLS_DIR/$name"
-
-    if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$target" ]; then
-      continue
-    fi
-
-    if [ "$DRY_RUN" -eq 1 ]; then
-      log "link for Claude Code: .claude/skills/$name -> $target"
-      continue
-    fi
-
-    run_mkdir "$links_dir"
-    rm -f "$dest"
-    ln -s "$target" "$dest"
-    log "linked for Claude Code: .claude/skills/$name -> $target"
-  done
-}
-
-# Move an existing path into the backup directory, preserving its basename.
-backup_one() {
-  local src="$1"
-  local dest_dir="$2"
-
-  { [ -e "$src" ] || [ -L "$src" ]; } || return 0
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "back up: ${src#$TARGET_ROOT/} -> ${dest_dir#$TARGET_ROOT/}/"
-  else
-    mkdir -p "$dest_dir"
-    mv "$src" "$dest_dir/"
-    log "backed up: ${src#$TARGET_ROOT/} -> ${dest_dir#$TARGET_ROOT/}/"
-  fi
-}
-
-# --- Detection helpers -----------------------------------------------------
-
-memory_bank_exists() {
-  [ -d "$TARGET_ROOT/memory-bank" ] || return 1
-  find "$TARGET_ROOT/memory-bank" -maxdepth 1 -name '*.md' -type f -print -quit \
-    2>/dev/null | grep -q .
-}
-
-# Every required file for this profile is present (extra files are ignored).
-structure_matches() {
-  local f
-  for f in "${REQUIRED_FILES[@]}"; do
-    [ -f "$TARGET_ROOT/memory-bank/$f" ] || return 1
-  done
-  return 0
-}
-
-# Installed AGENTS.md, CLAUDE.md, and the skills are exactly what we would write.
-rules_match() {
-  [ -f "$TARGET_ROOT/AGENTS.md" ] || return 1
-  diff -q "$TARGET_ROOT/AGENTS.md" "$INSTRUCTIONS_SRC" >/dev/null 2>&1 || return 1
-
-  if [ "$CLAUDE_MODE" = "symlink" ]; then
-    [ -L "$TARGET_ROOT/CLAUDE.md" ] || return 1
-    [ "$(readlink "$TARGET_ROOT/CLAUDE.md")" = "AGENTS.md" ] || return 1
-  else
-    [ -f "$TARGET_ROOT/CLAUDE.md" ] || return 1
-    [ -L "$TARGET_ROOT/CLAUDE.md" ] && return 1
-    diff -q "$TARGET_ROOT/CLAUDE.md" <(expected_claude) >/dev/null 2>&1 || return 1
-  fi
-
-  if [ "$INSTALL_SKILL" -eq 1 ]; then
-    [ ! -L "$TARGET_ROOT/$SKILLS_DIR/memory-bank" ] || return 1
-    [ ! -f "$TARGET_ROOT/$SKILLS_DIR/memory-bank/SKILL.md" ] || return 1
-    [ ! -L "$TARGET_ROOT/$SKILLS_DIR/memory-bank-read-only" ] || return 1
-    [ ! -f "$TARGET_ROOT/$SKILLS_DIR/memory-bank-read-only/SKILL.md" ] || return 1
-    [ ! -L "$TARGET_ROOT/$SKILLS_DIR/evidence-review" ] || return 1
-    [ ! -f "$TARGET_ROOT/$SKILLS_DIR/evidence-review/SKILL.md" ] || return 1
-    [ -f "$MAINTENANCE_SKILL_DEST" ] || return 1
-    diff -q "$MAINTENANCE_SKILL_DEST" "$MAINTENANCE_SKILL_SRC" >/dev/null 2>&1 || return 1
-    [ -f "$CONTEXT_SKILL_DEST" ] || return 1
-    diff -q "$CONTEXT_SKILL_DEST" "$CONTEXT_SKILL_SRC" >/dev/null 2>&1 || return 1
-    if [ "$PROFILE" = "incident-response" ]; then
-      [ -f "$IR_EVIDENCE_REVIEW_SKILL_DEST" ] || return 1
-      diff -q "$IR_EVIDENCE_REVIEW_SKILL_DEST" "$IR_EVIDENCE_REVIEW_SKILL_SRC" >/dev/null 2>&1 || return 1
-    fi
-  fi
-
-  if want_claude_links; then
-    local link_name legacy_link
-    for legacy_link in "${LEGACY_SKILLS[@]}"; do
-      [ ! -L "$TARGET_ROOT/.claude/skills/$legacy_link" ] || return 1
-    done
-    for link_name in "${INSTALLED_SKILLS[@]}"; do
-      [ -L "$TARGET_ROOT/.claude/skills/$link_name" ] || return 1
-      [ "$(readlink "$TARGET_ROOT/.claude/skills/$link_name")" = "../../$SKILLS_DIR/$link_name" ] || return 1
-    done
-  fi
-
-  return 0
-}
-
-# --- Scaffolding -----------------------------------------------------------
-
-scaffold_all() {
-  copy_template_dir "$TEMPLATE_DIR" "$TARGET_ROOT/memory-bank"
-  copy_file "$INSTRUCTIONS_SRC" "$TARGET_ROOT/AGENTS.md"
-  install_claude "$TARGET_ROOT/CLAUDE.md"
-  install_sensitive_stores
-  install_skill
-}
-
-print_migration_notice() {
-  local backup_dir="$1"
-  local rel="${backup_dir#$TARGET_ROOT/}"
-  log ""
-  log "========================================================================"
-  log "ACTION REQUIRED: migrate your old memory bank"
-  log "------------------------------------------------------------------------"
-  log "A memory bank existed but did not match the '$PROFILE' profile schema."
-  log "Your previous memory bank has been backed up to:"
-  log ""
-  log "    $rel/"
-  log ""
-  log "Fresh scaffolding was created in memory-bank/. The old content was NOT"
-  log "migrated automatically (a bash script cannot do this reliably)."
-  log ""
-  log "Ask your AI agent to do it, for example:"
-  log ""
-  log "    \"Migrate my memory bank from $rel/ into the new memory-bank/"
-  log "     scaffolding for the $PROFILE profile. Map old content to the new"
-  log "     files, preserve history, and mark anything superseded.\""
-  log "========================================================================"
-}
-
-# Claude Code loads skills only from .claude/skills/ (plus ~/.claude/skills and
-# plugins), so a skill in .agents/skills/ is silently invisible to it.
-claude_code_present() {
-  [ -d "$TARGET_ROOT/.claude" ] && return 0
-  [ -d "$HOME/.claude" ] && return 0
-  [ -n "${CLAUDECODE:-}" ] && return 0
-  command -v claude >/dev/null 2>&1 && return 0
-  return 1
-}
-
-print_skill_advisory() {
-  [ "$INSTALL_SKILL" -eq 1 ] || return 0
-
-  log ""
-  log "Memory bank maintenance skill installed to $SKILLS_DIR/memory-bank-maintenance/"
-  log "Read-only context skill installed to $SKILLS_DIR/memory-bank-context/"
-  if [ "$PROFILE" = "incident-response" ]; then
-    log "IR analysis skill installed to $SKILLS_DIR/memory-bank-ir-evidence-review/"
-  fi
-
-  case "$SKILLS_DIR" in
-    .claude/skills|.claude/skills/)
-      log "  Claude Code reads this location directly."
-      return 0
-      ;;
-  esac
-
-  log "  Read directly by VS Code / GitHub Copilot, which scans .agents/skills/."
-
-  if want_claude_links; then
-    log ""
-    log "  Claude Code detected: mirrored each skill into .claude/skills/ via a"
-    log "  relative symlink so it is discovered there too."
-    log "  Restart Claude Code if a session is already open."
-  else
-    log "  For tools that scan elsewhere, symlink or re-run with --skills-dir=PATH."
-  fi
-}
-
-# --- Main ------------------------------------------------------------------
-
-log "Initializing agent rules in: $TARGET_ROOT"
-log "Project type: $PROFILE"
-log ""
-
-if [ "$FORCE" -eq 1 ]; then
-  log "--force: overwriting profile-managed files in place (no backup, no migration prompt)."
-  log ""
-  scaffold_all
-  log ""
-  log "Done. AGENTS.md and CLAUDE.md are installed with the memory-bank/ schema."
-  print_skill_advisory
-  exit 0
-fi
-
-if ! memory_bank_exists; then
-  # Fresh install.
-  scaffold_all
-  log ""
-  log "Done. AGENTS.md and CLAUDE.md are installed with the memory-bank/ schema."
-  log "AGENTS.md is read by Codex, Cursor, GitHub Copilot, and other AGENTS.md-aware agents."
-  log "CLAUDE.md is read by Claude Code; it points at AGENTS.md ($CLAUDE_MODE mode)."
-  print_skill_advisory
-  exit 0
-fi
-
-# A memory bank already exists. Decide what to do.
-if structure_matches; then
-  if rules_match; then
-    log "Existing memory bank already matches the '$PROFILE' profile."
-    log "Nothing to do. (Use --force to rewrite profile-managed files in place.)"
-    exit 0
-  fi
-
-  # Same file schema, but the instruction files are stale. Refresh only the
-  # rules; leave the user's memory-bank/ content untouched.
-  log "Memory bank schema matches '$PROFILE', but the installed rules are out of date."
-  log "Refreshing instructions only; memory-bank/ is left untouched."
-  log ""
-  ALLOW_OVERWRITE=1
-  copy_file "$INSTRUCTIONS_SRC" "$TARGET_ROOT/AGENTS.md"
-  install_claude "$TARGET_ROOT/CLAUDE.md"
-  install_skill
-  ALLOW_OVERWRITE=0
-  log ""
-  log "Done. Instructions refreshed; no memory data was changed."
-  print_skill_advisory
-  exit 0
-fi
-
-# Structure mismatch: profile switched or schema changed. Back up and re-scaffold.
-BACKUP_DIR="$TARGET_ROOT/.old/memory-bank-$TIMESTAMP"
-log "Existing memory bank does NOT match the '$PROFILE' profile schema."
-log "Backing up the old memory bank and creating fresh scaffolding."
-log ""
-backup_one "$TARGET_ROOT/memory-bank" "$BACKUP_DIR"
-backup_one "$TARGET_ROOT/AGENTS.md" "$BACKUP_DIR"
-backup_one "$TARGET_ROOT/CLAUDE.md" "$BACKUP_DIR"
-log ""
-ALLOW_OVERWRITE=1
-scaffold_all
-ALLOW_OVERWRITE=0
-print_migration_notice "$BACKUP_DIR"
-print_skill_advisory
+#!/usr/bin/env python3
+"""Install native AGENTS instructions and a project-local, hidden workspace."""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import runpy
+import shutil
+import subprocess
+import sys
+import tempfile
+
+PROFILES = ("pentest", "academic-research", "general-project", "incident-response")
+ALIASES = {"hardware-pentest": "pentest", "software-pentest": "pentest",
+           "academic": "academic-research", "research": "academic-research",
+           "general": "general-project", "project": "general-project",
+           "incident": "incident-response", "dfir": "incident-response", "ir": "incident-response"}
+BANK = ".memory-bank"
+SHARED_SKILLS = ("memory-bank-context", "memory-bank-maintenance", "memory-bank-workflow")
+LEGACY_SKILLS = ("memory-bank", "memory-bank-read-only", "evidence-review")
+WORK_DIRS = ("planning/archive", "incoming", "references/datasets", "references/raw",
+             "sensitive", "artifacts", "backups", "runtime")
+LEGACY_STORES = {"sensitive": "sensitive", "incoming": "incoming", "artifacts": "artifacts",
+                 "loot": "artifacts", "evidence": "artifacts", "ref-docs": "references",
+                 "references": "references"}
+IGNORE_BEGIN = "# BEGIN mb-agent-rules managed paths"
+IGNORE_END = "# END mb-agent-rules managed paths"
+CLAUDE_MARKER = "<!-- Claude Code reads CLAUDE.md, not AGENTS.md. The line below imports it so both read the same instructions. Edit AGENTS.md instead of this file. -->"
+COPY_MARKER = "<!-- This file is identical to AGENTS.md. Edit AGENTS.md and re-run init-agent-rules to update both. -->"
+
+
+class InstallError(Exception):
+    pass
+
+
+def digest(path):
+    h = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def regular_tree(path):
+    """Inventory metadata only; never follow a user store's symlinks."""
+    if path.is_symlink():
+        raise InstallError(f"Cannot migrate symlink store: {path}")
+    if not path.is_dir():
+        raise InstallError(f"Expected directory: {path}")
+    for base, dirs, files in os.walk(path, followlinks=False):
+        for name in dirs + files:
+            p = Path(base) / name
+            if p.is_symlink() or (not p.is_dir() and not p.is_file()):
+                raise InstallError(f"Resolve non-regular migration entry first: {p}")
+            yield p
+
+
+def safe_destination(root, path):
+    if not path.is_relative_to(root):
+        raise InstallError(f"Destination escapes project: {path}")
+    for p in (path, *path.parents):
+        if p == root.parent:
+            break
+        if p.is_symlink():
+            raise InstallError(f"Destination must not traverse a symlink: {p}")
+
+
+def ensure_directory(path, mode=0o700):
+    missing = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        cursor = cursor.parent
+    for directory in reversed(missing):
+        directory.mkdir(mode=mode)
+
+
+def atomic_write(path, content, mode=0o644):
+    ensure_directory(path.parent, 0o700 if mode == 0o600 else 0o755)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(content)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def managed_claude(path):
+    if path.is_symlink():
+        return os.readlink(path) == "AGENTS.md"
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8")
+    return text == CLAUDE_MARKER + "\n\n@AGENTS.md\n" or text.startswith(COPY_MARKER + "\n\n# ")
+
+
+def ignore_content(old, migrating, legacy_install):
+    lines = old.splitlines()
+    result = []
+    inside = False
+    # Only exact exclusions generated by the legacy profile installer. A store's
+    # old name alone does not prove that a user's broader ignore rule was managed.
+    legacy = {"/memory-bank/", "/AGENTS.md", "/CLAUDE.md", "/.agents/", "/.claude/", "/.old/", "/sensitive/"}
+    for line in lines:
+        if line == IGNORE_BEGIN:
+            if inside:
+                raise InstallError("Malformed managed .gitignore block")
+            inside = True
+            continue
+        if line == IGNORE_END:
+            if not inside:
+                raise InstallError("Malformed managed .gitignore block")
+            inside = False
+            continue
+        if inside or line == f"/{BANK}/":
+            continue
+        if migrating and legacy_install and line in legacy:
+            continue
+        result.append(line)
+    if inside:
+        raise InstallError("Unclosed managed .gitignore block")
+    prefix = "\n".join(result).rstrip()
+    return (prefix + "\n\n" if prefix else "") + f"{IGNORE_BEGIN}\n/{BANK}/\n{IGNORE_END}\n"
+
+
+class Installer:
+    def __init__(self, args):
+        self.args = args
+        self.root = Path.cwd().resolve()
+        self.source = Path(os.environ.get("AGENT_RULES_ROOT", Path(__file__).resolve().parent.parent)).resolve()
+        self.profile = ALIASES.get(args.profile, args.profile)
+        if self.profile not in PROFILES:
+            raise InstallError(f"Unknown profile: {args.profile}")
+        self.bank = self.root / BANK
+        self.oldbank = self.root / "memory-bank"
+        self.stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        self.backup = self.bank / "backups" / self.stamp
+        self.changed = False
+        self.record = {}
+        record = self.bank / "layout.json"
+        safe_destination(self.root, record)
+        if record.exists():
+            self.record = json.loads(record.read_text(encoding="utf-8"))
+            if not isinstance(self.record, dict) or self.record.get("schema") != 1:
+                raise InstallError("Unsupported .memory-bank/layout.json; resolve before installation")
+            previous = self.record.get("skills_dir", ".agents/skills")
+            if not isinstance(previous, str) or Path(previous).is_absolute() or ".." in Path(previous).parts or Path(previous) == Path("."):
+                raise InstallError("Unsafe recorded skill destination; resolve layout metadata before installation")
+        skills_dir = args.skills_dir or ".agents/skills"
+        skill_path = Path(skills_dir)
+        if skill_path.is_absolute() or ".." in skill_path.parts or skill_path == Path("."):
+            raise InstallError("--skills-dir must be a project-relative directory without '..'")
+        self.skills_dir = skill_path.as_posix()
+        self.skills = list(SHARED_SKILLS)
+        same_profile = self.record.get("profile") == self.profile
+        self.findings = args.findings or self.profile in ("pentest", "incident-response") or (same_profile and self.record.get("findings", False))
+        self.external = args.external_status or self.profile in ("pentest", "incident-response") or (same_profile and self.record.get("external_status", False))
+        if self.profile == "academic-research" and self.findings:
+            raise InstallError("--findings is a general-project opt-in; academic-research uses research-specific records")
+        if self.findings:
+            self.skills.append("memory-bank-findings")
+        if self.profile == "incident-response":
+            self.skills.append("memory-bank-ir-evidence-review")
+        self.template = self.source / "templates" / f"{self.profile}-memory-bank"
+        self.instructions = self.source / "instructions" / f"AGENTS.{self.profile}.md"
+        self.moves = []
+        self.mappings = {}
+        self.migration_entries = []
+        self.legacy_install = False
+        agents = self.root / "AGENTS.md"
+        if agents.is_file() and not agents.is_symlink():
+            self.legacy_install = bool(re.match(r"# (?:General Project|Pentest|Academic Research|Incident Response).*Memory Bank", agents.read_text(encoding="utf-8")))
+        self.claude = self.root / "CLAUDE.md"
+
+    def say(self, message):
+        print(("[dry-run] " if self.args.dry_run else "") + message)
+
+    def write(self, path, content, *, mode=0o644, backup=False):
+        safe_destination(self.root, path)
+        data = content.encode() if isinstance(content, str) else content
+        if path.is_dir():
+            raise InstallError(f"File destination is a directory: {path}")
+        if path.is_file() and path.read_bytes() == data:
+            return
+        self.changed = True
+        self.say(f"write {path.relative_to(self.root)}")
+        if not self.args.dry_run:
+            if backup and path.exists():
+                dest = self.backup / "replaced" / path.relative_to(self.root)
+                ensure_directory(dest.parent)
+                shutil.copy2(path, dest)
+                dest.chmod(0o600)
+            atomic_write(path, data, mode)
+
+    def mkdir(self, path, mode=0o700):
+        safe_destination(self.root, path)
+        if path.exists():
+            if not path.is_dir():
+                raise InstallError(f"Directory destination is a file: {path}")
+            return
+        self.changed = True
+        self.say(f"mkdir {path.relative_to(self.root)}")
+        if not self.args.dry_run:
+            ensure_directory(path, mode)
+
+    def preflight(self):
+        if not self.template.is_dir() or not self.instructions.is_file():
+            raise InstallError(f"Missing profile sources under {self.source}")
+        safe_destination(self.root, self.bank)
+        safe_destination(self.root, self.root / self.skills_dir)
+        if self.oldbank.exists():
+            if not self.args.migrate:
+                raise InstallError("Legacy memory-bank/ exists. Preview with --migrate --dry-run, then use --migrate.")
+            if self.bank.exists():
+                raise InstallError("Both memory-bank/ and .memory-bank/ exist; reconcile their contents before migration.")
+            list(regular_tree(self.oldbank))
+            self.moves.append((self.oldbank, self.bank))
+            self.mappings["memory-bank/"] = f"{BANK}/"
+        if self.args.migrate:
+            for old, new in LEGACY_STORES.items():
+                src = self.root / old
+                if src.exists() or src.is_symlink():
+                    list(regular_tree(src))
+                    self.moves.append((src, self.bank / new))
+                    self.mappings[old + "/"] = f"{BANK}/{new}/"
+            for old, new in ((".old", "backups/legacy"), ("dashboard/certs", "runtime/dashboard/certs"),
+                             ("dashboard/venv", "runtime/dashboard/venv"), ("dashboard/cache", "runtime/dashboard/cache")):
+                src = self.root / old
+                if src.exists():
+                    # Venv trees contain interpreter symlinks; move them intact, not through a data reader.
+                    if src.is_symlink():
+                        raise InstallError(f"Resolve symlink before migration: {src}")
+                    self.moves.append((src, self.bank / new))
+            config = self.root / "dashboard.config.json"
+            if config.exists():
+                self.moves.append((config, self.bank / "dashboard.config.json"))
+        destinations = {}
+        for src, dest in self.moves:
+            safe_destination(self.root, dest)
+            entries = [src] + (list(src.rglob("*")) if src.is_dir() else [])
+            for entry in entries:
+                final = dest / entry.relative_to(src)
+                directory = entry.is_dir() and not entry.is_symlink()
+                if final in destinations and not (directory and destinations[final]):
+                    raise InstallError(f"Migration collision at {final.relative_to(self.root)}; no files moved. Choose a disposition first.")
+                candidates = [final]
+                if src != self.oldbank and self.oldbank.exists():
+                    candidates.append(self.oldbank / final.relative_to(self.bank))
+                for candidate in candidates:
+                    if candidate.exists() or candidate.is_symlink():
+                        if not (directory and candidate.is_dir() and not candidate.is_symlink()):
+                            raise InstallError(f"Migration collision at {final.relative_to(self.root)}; no files moved. Choose a disposition first.")
+                    for parent in candidate.parents:
+                        if parent == self.root:
+                            break
+                        if parent.exists() and not parent.is_dir():
+                            raise InstallError(f"Migration parent is not a directory: {parent}")
+                destinations[final] = directory
+                if not directory:
+                    stat = entry.lstat()
+                    record = {"source": entry.relative_to(self.root).as_posix(),
+                              "destination": final.relative_to(self.root).as_posix(),
+                              "source_store": src.relative_to(self.root).as_posix(),
+                              "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+                              "mode": oct(stat.st_mode & 0o777)}
+                    if entry.is_symlink():
+                        record["symlink"] = os.readlink(entry)
+                    else:
+                        record["sha256"] = digest(entry)
+                    self.migration_entries.append(record)
+        for final in destinations:
+            if any(parent in destinations and not destinations[parent] for parent in final.parents):
+                raise InstallError(f"Migration file/directory collision at {final.relative_to(self.root)}; no files moved.")
+        if self.moves and not (self.source / "skills/memory-bank-workflow/scripts/workspace.py").is_file():
+            raise InstallError("Migration requires the complete memory-bank-workflow package")
+        if not self.args.no_skill:
+            # Discovery and retirement also touch these paths, even when they are
+            # not the selected package destination. Check ancestors before reads
+            # or any installation/migration writes.
+            safe_destination(self.root, self.root / ".claude/skills")
+            previous_dir = self.record.get("skills_dir")
+            if previous_dir:
+                safe_destination(self.root, self.root / previous_dir)
+            for name in self.skills:
+                src = self.source / "skills" / name
+                if not (src / "SKILL.md").is_file():
+                    raise InstallError(f"Missing complete skill package: {src}")
+                for parent in {self.root / self.skills_dir, self.root / ".claude/skills"}:
+                    self.validate_skill_link(name, parent / name)
+            for name in self.record.get("skill_packages", []):
+                if name in (*SHARED_SKILLS, "memory-bank-findings", "memory-bank-ir-evidence-review") and previous_dir:
+                    self.validate_skill_link(name, self.root / previous_dir / name)
+        if self.findings:
+            flavor = "incident-response" if self.profile == "incident-response" else "pentest"
+            self.finding_template = self.source / "templates/findings" / flavor
+            if not (self.finding_template / "_TEMPLATE/finding.md").is_file():
+                raise InstallError(f"Missing finding template: {self.finding_template}")
+        if self.claude.exists() or self.claude.is_symlink():
+            if not managed_claude(self.claude):
+                self.say("WARNING: user-owned CLAUDE.md preserved; it can suppress Claude's native AGENTS fallback. Resolve its instruction source explicitly.")
+        for relative in (".claude/CLAUDE.md", "CLAUDE.local.md"):
+            if (self.root / relative).exists():
+                self.say(f"WARNING: {relative} can suppress native AGENTS fallback; it is not modified.")
+        # Validate generated destinations before the first mutation.
+        for path in (self.root / "AGENTS.md", self.root / ".gitignore", self.bank / "layout.json", self.root / "deliverables/README.md"):
+            safe_destination(self.root, path)
+            if path.is_dir():
+                raise InstallError(f"Expected file at {path}")
+        old_ignore = (self.root / ".gitignore").read_text() if (self.root / ".gitignore").exists() else ""
+        self.new_ignore = ignore_content(old_ignore, self.args.migrate, self.legacy_install)
+        if self.moves:
+            git = subprocess.run(["git", "ls-files", "-z"], cwd=self.root, capture_output=True)
+            if git.returncode == 0:
+                tracked = git.stdout.decode(errors="surrogateescape").split("\0")
+                if any(any(p == str(src.relative_to(self.root)) or p.startswith(str(src.relative_to(self.root)) + "/") for src, _ in self.moves) for p in tracked if p):
+                    self.say("WARNING: migrated inputs are tracked by Git. Moving/ignoring them does not remove historical copies; review index/history separately. No Git mutation will run.")
+
+    def move_tree(self, src, dest):
+        if not src.is_dir():
+            ensure_directory(dest.parent)
+            shutil.move(str(src), str(dest))
+            return
+        if not dest.exists():
+            ensure_directory(dest.parent)
+            shutil.move(str(src), str(dest))
+            return
+        for entry in src.iterdir():
+            self.move_tree(entry, dest / entry.name)
+        src.rmdir()
+
+    def migrate(self):
+        for src, dest in self.moves:
+            self.changed = True
+            self.say(f"move {src.relative_to(self.root)} -> {dest.relative_to(self.root)}")
+            if not self.args.dry_run:
+                self.move_tree(src, dest)
+                if dest == self.bank:
+                    self.bank.chmod(0o700)
+        if self.moves and not self.args.dry_run:
+            for record in self.migration_entries:
+                path = self.root / record["destination"]
+                if "sha256" in record and digest(path) != record["sha256"]:
+                    raise InstallError(f"Migration hash verification failed at {record['destination']}; preserve all remaining stores for investigation.")
+                if "symlink" in record and (not path.is_symlink() or os.readlink(path) != record["symlink"]):
+                    raise InstallError(f"Migration link verification failed at {record['destination']}")
+            self.write(self.backup / "migration.json", json.dumps({"schema": 1, "completed_at": self.stamp, "entries": self.migration_entries}, indent=2) + "\n", mode=0o600)
+        if self.mappings:
+            mapping_path = self.bank / "path-migrations.json"
+            previous = json.loads(mapping_path.read_text()) if mapping_path.exists() else {"schema": 1, "prefixes": {}, "project_roots": []}
+            previous["prefixes"].update(self.mappings)
+            if str(self.root) not in previous["project_roots"]:
+                previous["project_roots"].append(str(self.root))
+            self.write(mapping_path, json.dumps(previous, indent=2) + "\n", mode=0o600)
+            if not self.args.dry_run:
+                ensure_directory(self.backup)
+                # Cognitive records only; do not traverse acquired material as memory.
+                for path in self.bank.glob("*.md"):
+                    if path.is_file() and not path.is_symlink():
+                        shutil.copy2(path, self.backup / path.name)
+                        (self.backup / path.name).chmod(0o600)
+            self.rewrite_current_references()
+
+    def rewrite_current_references(self):
+        if self.args.dry_run:
+            self.say("repair current Markdown links and cognitive code-path references; preserve originals")
+            return
+        helpers = runpy.run_path(str(self.source / "skills/memory-bank-workflow/scripts/workspace.py"))
+        paths = [self.bank / path.name for path in self.template.glob("*.md")]
+        paths += [self.bank / "findings.md", self.bank / "references/reference.md", self.root / "README.md"]
+        paths += helpers["active_plans"](self.root, self.bank / "planning")
+        paths += list((self.root / "findings").rglob("*.md"))
+        for path in dict.fromkeys(paths):
+            if not path.is_file() or path.is_symlink():
+                continue
+            safe_destination(self.root, path)
+            original = path.read_text()
+            updated = original
+            for old, new in self.mappings.items():
+                updated = helpers["moved_references"](
+                    updated, path, self.root, self.root / old, self.root / new,
+                    directory=True, code_paths=path.is_relative_to(self.bank))
+            if updated != original:
+                self.write(path, updated, mode=0o600 if path.is_relative_to(self.bank) else 0o644, backup=True)
+
+    def validate_skill_link(self, name, dest):
+        if not dest.is_symlink():
+            return
+        resolved = dest.resolve()
+        if resolved == (self.source / "skills" / name).resolve():
+            return
+        previous_dir = self.record.get("skills_dir")
+        if previous_dir and name in self.record.get("skill_packages", []):
+            previous = self.root / previous_dir / name
+            # Metadata must identify a separate, real managed package. Resolving
+            # dest against itself would bless any user-owned symlink.
+            if previous != dest and previous.is_dir() and not previous.is_symlink():
+                safe_destination(self.root, previous)
+                if resolved == previous.resolve():
+                    return
+        raise InstallError(f"Skill destination is an unrelated symlink: {dest}")
+
+    def install_skill(self, name):
+        source = self.source / "skills" / name
+        dest = self.root / self.skills_dir / name
+        if dest.is_symlink():
+            resolved = dest.resolve()
+            if resolved == source.resolve():
+                # A source checkout may intentionally link its own complete package.
+                return
+            self.validate_skill_link(name, dest)
+            self.changed = True
+            self.say(f"replace managed discovery link with complete package: {dest.relative_to(self.root)}")
+            if self.args.dry_run:
+                return
+            dest.unlink()
+        for path in sorted(source.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            self.write(dest / path.relative_to(source), path.read_bytes(), mode=0o755 if os.access(path, os.X_OK) else 0o644, backup=True)
+
+    def claude_links(self):
+        if self.skills_dir == ".claude/skills":
+            return
+        safe_destination(self.root, self.root / ".claude/skills")
+        present = (self.root / ".claude").exists() or (Path.home() / ".claude").is_dir() or os.environ.get("CLAUDECODE") or shutil.which("claude")
+        if not present:
+            return
+        for name in self.skills:
+            dest = self.root / ".claude/skills" / name
+            target = os.path.relpath(self.root / self.skills_dir / name, dest.parent)
+            if dest.is_symlink() and os.readlink(dest) == target:
+                continue
+            if dest.exists() and not dest.is_symlink():
+                source = self.source / "skills" / name
+                # Replace only a known package. Unknown extras are preserved with a conflict.
+                existing = {str(p.relative_to(dest)): p for p in dest.rglob("*") if p.is_file()}
+                expected = {str(p.relative_to(source)): p for p in source.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+                known = existing and all(k in expected and digest(v) == digest(expected[k]) for k, v in existing.items())
+                if not known and self.record.get("skills_dir") != ".claude/skills":
+                    raise InstallError(f"Preserved user skill directory {dest}; move it explicitly before creating discovery link")
+                self.say(f"back up existing skill directory {dest.relative_to(self.root)}")
+                if not self.args.dry_run:
+                    backup = self.backup / "skills" / name
+                    ensure_directory(backup.parent)
+                    shutil.move(str(dest), str(backup))
+            self.changed = True
+            self.say(f"link {dest.relative_to(self.root)} -> {target}")
+            if not self.args.dry_run:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.is_symlink():
+                    dest.unlink()
+                dest.symlink_to(target, target_is_directory=True)
+
+    def retire_previous_skills(self):
+        previous_dir = self.record.get("skills_dir")
+        if not previous_dir:
+            return
+        for name in self.record.get("skill_packages", []):
+            if name not in (*SHARED_SKILLS, "memory-bank-findings", "memory-bank-ir-evidence-review"):
+                continue
+            if previous_dir == self.skills_dir and name in self.skills:
+                continue
+            # Current Claude discovery links have already been refreshed.
+            if previous_dir == ".claude/skills" and name in self.skills:
+                continue
+            path = self.root / previous_dir / name
+            safe_destination(self.root, path.parent)
+            if path.resolve() == (self.source / "skills" / name).resolve():
+                continue
+            if path.is_symlink():
+                self.say(f"retire old managed skill link {path.relative_to(self.root)}")
+                self.changed = True
+                if not self.args.dry_run:
+                    path.unlink()
+            elif path.exists():
+                safe_destination(self.root, path)
+                self.say(f"archive previous managed skill package {path.relative_to(self.root)}")
+                self.changed = True
+                if not self.args.dry_run:
+                    backup = self.backup / "retired-skills" / previous_dir / name
+                    ensure_directory(backup.parent)
+                    shutil.move(str(path), str(backup))
+            link = self.root / ".claude/skills" / name
+            if name not in self.skills and link.is_symlink() and link.resolve() == path.resolve():
+                self.changed = True
+                if not self.args.dry_run:
+                    link.unlink()
+
+    def retire_legacy(self):
+        if managed_claude(self.claude):
+            self.changed = True
+            self.say("archive obsolete managed CLAUDE.md instruction bridge")
+            if not self.args.dry_run:
+                ensure_directory(self.backup)
+                shutil.move(str(self.claude), str(self.backup / "CLAUDE.md"))
+        if self.args.no_skill:
+            return
+        for parent in {self.root / self.skills_dir, self.root / ".claude/skills"}:
+            for name in LEGACY_SKILLS:
+                path = parent / name
+                if not path.exists() and not path.is_symlink():
+                    continue
+                if path.is_symlink():
+                    if not path.resolve().is_relative_to(self.source / "skills"):
+                        self.say(f"WARNING: preserving unrelated legacy-name link {path.relative_to(self.root)}")
+                        continue
+                elif not (path / "SKILL.md").is_file() or not re.search(r"(?m)^name: (?:memory-bank|memory-bank-read-only|evidence-review)\s*$", (path / "SKILL.md").read_text()):
+                    self.say(f"WARNING: preserving unrecognized legacy-name directory {path.relative_to(self.root)}")
+                    continue
+                self.changed = True
+                self.say(f"archive legacy managed skill {path.relative_to(self.root)}")
+                if not self.args.dry_run:
+                    dest = self.backup / "legacy-skills" / parent.relative_to(self.root) / name
+                    ensure_directory(dest.parent)
+                    if path.is_symlink():
+                        path.unlink()
+                    elif (path / "SKILL.md").is_file():
+                        ensure_directory(dest)
+                        shutil.move(str(path / "SKILL.md"), str(dest / "SKILL.md"))
+                        if not any(path.iterdir()):
+                            path.rmdir()
+
+    def install(self):
+        self.preflight()
+        self.migrate()
+        self.mkdir(self.bank)
+        old_profile = self.record.get("profile")
+        if old_profile and old_profile != self.profile:
+            self.say(f"Profile change {old_profile} -> {self.profile}: preserve records; audit semantic mapping with memory-bank-maintenance")
+        for sub in WORK_DIRS:
+            self.mkdir(self.bank / sub)
+        for path in sorted(self.template.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(self.template)
+            dest = self.bank / relative
+            exists = dest.exists() or (self.args.dry_run and self.oldbank.exists() and (self.oldbank / relative).exists())
+            if not exists or (self.args.force and relative.parent == Path(".")):
+                self.write(dest, path.read_bytes(), mode=0o600, backup=True)
+        if self.mappings and not self.args.dry_run:
+            rows = "\n".join(f"- `{old}` → `{new}`" for old, new in self.mappings.items())
+            note = f"\n## Storage migration — {self.stamp} — Done\n\nHistorical narrative and custody bytes are preserved. Current Markdown links and cognitive code-path targets were updated with originals retained in backups; path-migrations.json resolves immutable historical references. New records use canonical paths.\n\n{rows}\n"
+            for name in ("progress.md", "activeContext.md", "sensitiveDataPolicy.md"):
+                path = self.bank / name
+                text = path.read_text()
+                if name == "sensitiveDataPolicy.md":
+                    for old, new in LEGACY_STORES.items():
+                        text = text.replace(f"`{old}/`", f"`{BANK}/{new}/`")
+                    note_policy = "\nCurrent profile-managed stores are direct children of .memory-bank/. Existing classification, authorization and privacy constraints remain in force; current store paths above supersede legacy declarations. Original cognitive records are retained in backups.\n"
+                else:
+                    note_policy = ""
+                self.write(path, text + note + note_policy, mode=0o600)
+        if old_profile and old_profile != self.profile and not self.args.dry_run:
+            path = self.bank / "progress.md"
+            self.write(path, path.read_text() + f"\n## Profile change — {self.stamp} — Planned\n\nChanged {old_profile} to {self.profile}; historical records retained. Review authority and map domain semantics before operational work.\n", mode=0o600)
+        instructions = self.instructions.read_text().replace(".agents/skills", self.skills_dir)
+        if self.findings and self.profile == "general-project":
+            instructions += "\n## Enabled Optional Findings\n\nThis installation also loads `.memory-bank/findings.md` after authority files. It is the lightweight status authority; canonical full narratives live under `findings/`. Use `memory-bank-findings` for promotion, synchronization and warning-only preflight. This explicit opt-in does not change project authorization or automatically enable IR custody.\n"
+        self.write(self.root / "AGENTS.md", instructions, backup=True)
+        self.retire_legacy()
+        if not self.args.no_skill:
+            for name in self.skills:
+                self.install_skill(name)
+            self.claude_links()
+            self.retire_previous_skills()
+        deliverables = self.root / "deliverables/README.md"
+        if not deliverables.exists():
+            self.write(deliverables, "# Deliverables\n\nFinal reports, exports and archives live here once. This directory is eligible for Git tracking; generation does not authorize staging, committing or external delivery. Canonical report-facing source lives in findings/ where enabled. No document compiler is installed by this project.\n")
+        if self.findings:
+            log = self.bank / "findings.md"
+            if self.profile == "general-project" and not log.exists():
+                source = self.source / "templates/pentest-memory-bank/findings.md"
+                self.write(log, source.read_bytes(), mode=0o600)
+            for path in sorted(self.finding_template.rglob("*")):
+                if path.is_file():
+                    dest = self.root / "findings" / path.relative_to(self.finding_template)
+                    if not dest.exists() or self.args.force:
+                        self.write(dest, path.read_bytes(), backup=True)
+        layout = {"schema": 1, "profile": self.profile, "skills_dir": self.skills_dir,
+                  "findings": bool(self.findings), "external_status": bool(self.external),
+                  "skill_packages": self.record.get("skill_packages", []) if self.args.no_skill else self.skills}
+        self.write(self.bank / "layout.json", json.dumps(layout, indent=2) + "\n", mode=0o600)
+        self.write(self.root / ".gitignore", self.new_ignore)
+        if self.external:
+            command = self.source / "skills/memory-bank-workflow/scripts/workspace.py"
+            invocation = [sys.executable, "-B", str(command), "--root", str(self.root), "status"]
+            if self.args.dry_run:
+                self.say("check/generate external project-status.md from explicit publishable fields")
+            elif subprocess.run([*invocation, "--check"], capture_output=True).returncode:
+                self.changed = True
+                self.say("generate external project-status.md from explicit publishable fields")
+                if subprocess.run(invocation).returncode:
+                    raise InstallError("Installation preserved; status generation failed. Resolve the internal status schema and rerun status.")
+        self.say("Installation complete." if self.changed else "Nothing to do. Existing workspace matches.")
+        if self.moves:
+            self.say("Historical paths are recorded in .memory-bank/path-migrations.json; review reference links and the appended migration ledger. Acquired bytes and original cognitive snapshots were preserved.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("profile", help="pentest, incident-response, academic-research, general-project (aliases accepted)")
+    parser.add_argument("--migrate", action="store_true", help="explicitly relocate legacy bank/data stores; conflicts are preflighted")
+    parser.add_argument("--dry-run", action="store_true", help="show changes without writing")
+    parser.add_argument("--force", action="store_true", help="replace cognitive templates/scaffolds after preserving originals in bank backups")
+    parser.add_argument("--skills-dir", help="project-relative skill destination (default .agents/skills)")
+    parser.add_argument("--no-skill", action="store_true", help="skip installing portable skill packages")
+    parser.add_argument("--findings", action="store_true", help="enable optional security finding conventions")
+    parser.add_argument("--external-status", action="store_true", help="enable outward status for research/general profiles")
+    args = parser.parse_args()
+    try:
+        Installer(args).install()
+        return 0
+    except (InstallError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

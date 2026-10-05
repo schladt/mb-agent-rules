@@ -12,12 +12,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-MEMORY_BANK = PROJECT_ROOT / "memory-bank"
-ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
-INCOMING_DIR = PROJECT_ROOT / "incoming"
-CONFIG_FILE = PROJECT_ROOT / "dashboard.config.json"
-SENSITIVE_DIR = PROJECT_ROOT / "sensitive"
+MEMORY_BANK = PROJECT_ROOT / ".memory-bank"
+ARTIFACTS_DIR = MEMORY_BANK / "artifacts"
+INCOMING_DIR = MEMORY_BANK / "incoming"
+CONFIG_FILE = MEMORY_BANK / "dashboard.config.json"
+SENSITIVE_DIR = MEMORY_BANK / "sensitive"
 CUSTODY_MANIFEST = ARTIFACTS_DIR / ".custody-manifest.jsonl"
+
+sys.dont_write_bytecode = True
+from ir_common import canonical_path, parse_review_queue, projection_errors
 
 REQUIRED_SECTIONS = {
     "incidentBrief.md": ["Incident ID", "Classification", "Severity", "Current Phase", "Detection", "Summary of Known Facts"],
@@ -41,6 +44,7 @@ REQUIRED_SECTIONS = {
     ],
     "progress.md": ["Entries"],
     "reviewQueue.md": ["Pending Review", "Done"],
+    "project-status.md": ["Publishable", "Internal"],
 }
 
 READINESS_FIELDS = {
@@ -127,9 +131,9 @@ def check_sensitive_policy() -> list[dict]:
         issues.append(issue("error", "sensitive-policy", f"sensitiveDataPolicy.md: unsupported memory-bank plaintext policy: {plaintext}"))
     if plaintext == "synthetic-only" and mode != "private-lab":
         issues.append(issue("error", "sensitive-policy", "sensitiveDataPolicy.md: synthetic-only plaintext requires private-lab mode"))
-    if "`sensitive/`" not in sections.get("Standard Store", ""):
+    if "`.memory-bank/sensitive/`" not in sections.get("Standard Store", ""):
         issues.append(issue("error", "sensitive-policy", "sensitiveDataPolicy.md: standard sensitive/ store is not declared"))
-    if "`artifacts/`" not in sections.get("Profile Stores", ""):
+    if "`.memory-bank/artifacts/`" not in sections.get("Profile Stores", ""):
         issues.append(issue("error", "sensitive-policy", "sensitiveDataPolicy.md: incident-response artifacts/ store is not declared"))
     return issues
 
@@ -203,12 +207,12 @@ def _canonical_sha256(value: dict) -> str:
 
 def _contained_artifact(stored: str) -> Path | None:
     try:
-        if Path(stored).is_absolute():
+        if MEMORY_BANK.is_symlink() or ARTIFACTS_DIR.is_symlink() or Path(stored).is_absolute():
             return None
         base = ARTIFACTS_DIR.resolve(strict=True)
-        candidate = (PROJECT_ROOT / stored).resolve(strict=True)
+        raw = canonical_path(PROJECT_ROOT, stored)
+        candidate = raw.resolve(strict=True)
         candidate.relative_to(base)
-        raw = (PROJECT_ROOT / stored).absolute()
         relative = raw.relative_to(ARTIFACTS_DIR.absolute())
         cursor = ARTIFACTS_DIR.absolute()
         for part in relative.parts:
@@ -270,7 +274,7 @@ def check_orphan_artifacts(entries: list[tuple[str, dict[str, str]]]) -> list[di
     issues = []
     if not ARTIFACTS_DIR.exists():
         return issues
-    indexed = {fields.get("Stored path", "").strip("`") for _, fields in entries}
+    indexed = {_contained_artifact(fields.get("Stored path", "").strip("`")) for _, fields in entries}
     for path in sorted(ARTIFACTS_DIR.iterdir()):
         if path.name in {".intake.lock", CUSTODY_MANIFEST.name}:
             continue
@@ -280,7 +284,7 @@ def check_orphan_artifacts(entries: list[tuple[str, dict[str, str]]]) -> list[di
             issues.append(issue("error", "intake-recovery", f"Unjournaled incomplete artifact copy: {path.name}"))
         elif path.name.startswith(".quarantine-"):
             issues.append(issue("warning", "quarantine", f"Quarantined failed-verification copy requires review: {path.name}"))
-        elif path.is_file() and f"artifacts/{path.name}" not in indexed:
+        elif path.is_file() and path.resolve() not in indexed:
             issues.append(issue("warning", "orphan-artifacts", f"File is not indexed: {path.name}"))
     return issues
 
@@ -340,7 +344,11 @@ def check_custody_manifest(entries: list[tuple[str, dict[str, str]]]) -> list[di
             continue
         if fields.get("SHA-256", "").strip("`").lower() != artifact.get("sha256"):
             issues.append(issue("error", "custody-manifest", f"{artifact_id}: index digest differs from custody manifest"))
-        if fields.get("Stored path", "").strip("`") != artifact.get("stored_path"):
+        try:
+            equal_paths = canonical_path(PROJECT_ROOT, fields.get("Stored path", "").strip("`")) == canonical_path(PROJECT_ROOT, artifact.get("stored_path", ""))
+        except (OSError, ValueError):
+            equal_paths = False
+        if not equal_paths:
             issues.append(issue("error", "custody-manifest", f"{artifact_id}: index path differs from custody manifest"))
     for artifact_id, fields in entries:
         if "Auto-ingested" in fields.get("Handling notes", "") and artifact_id not in manifested:
@@ -417,13 +425,13 @@ def check_references(entries: list[tuple[str, dict[str, str]]]) -> list[dict]:
 
 
 def check_review_queue() -> list[dict]:
-    content = read_mb("reviewQueue.md")
-    ids = re.findall(r"^### (RQ-\d{3})\s*—", content, re.MULTILINE)
-    issues = _check_sequence(ids, "RQ", 3, "review-queue")
-    pending_section = content.split("## Pending Review", 1)[-1].split("## Done", 1)[0]
-    pending = re.findall(r"^### (RQ-\d{3})\s*—", pending_section, re.MULTILINE)
+    items = parse_review_queue(read_mb("reviewQueue.md"))
+    issues = _check_sequence([item["id"] for item in items], "RQ", 3, "review-queue")
+    for item in items:
+        issues.extend(issue("error", "review-queue", f"{item['id']}: {error}") for error in item["errors"])
+    pending = [item for item in items if item["section"] == "pending"]
     if pending:
-        unchecked = len(re.findall(r"- \[ \]", pending_section))
+        unchecked = sum(item["unchecked"] for item in pending)
         issues.append(issue("warning", "review-queue", f"{len(pending)} item(s) pending review with {unchecked} unchecked tasks"))
     return issues
 
@@ -431,15 +439,11 @@ def check_review_queue() -> list[dict]:
 def check_unprocessed_incoming() -> list[dict]:
     if not INCOMING_DIR.exists():
         return []
-    files = [path for path in INCOMING_DIR.iterdir() if path.is_file() and not path.name.startswith(".")]
+    files = [path for path in INCOMING_DIR.iterdir() if path.name != ".gitkeep"]
     if not files:
         return []
     names = ", ".join(path.name for path in files[:5])
     return [issue("warning", "incoming", f"{len(files)} unprocessed file(s) in incoming/: {names}")]
-
-
-def _is_string_list(value: object) -> bool:
-    return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
 def check_executive_summary(entries: list[tuple[str, dict[str, str]]]) -> list[dict]:
@@ -450,74 +454,14 @@ def check_executive_summary(entries: list[tuple[str, dict[str, str]]]) -> list[d
         data = json.loads(path.read_text(encoding="utf-8"), parse_constant=_reject_nonfinite_json)
     except (OSError, UnicodeError, ValueError) as exc:
         return [issue("error", "executive-summary", f"executiveSummary.json is invalid JSON: {exc}")]
-    issues = []
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
-        return [issue("error", "executive-summary", "executiveSummary.json must be a schema_version 1 object")]
-    for key in ("generated_at", "narrative", "theory_summary"):
-        if not isinstance(data.get(key), str):
-            issues.append(issue("error", "executive-summary", f"{key} must be a string"))
-    if isinstance(data.get("generated_at"), str) and not _parse_utc(data["generated_at"]):
-        issues.append(issue("warning", "executive-summary", "generated_at is not an explicit UTC timestamp"))
-    phases = data.get("attack_phases")
-    if not isinstance(phases, list):
-        issues.append(issue("error", "executive-summary", "attack_phases must be an array"))
-        phases = []
-    known_findings = set(re.findall(r"^### (F-\d{3})", read_mb("findings.md"), re.MULTILINE))
-    for index, phase in enumerate(phases):
-        if not isinstance(phase, dict):
-            issues.append(issue("error", "executive-summary", f"attack_phases[{index}] must be an object"))
-            continue
-        if phase.get("color") not in {"warning", "danger", "purple", "success", "info", "accent"}:
-            issues.append(issue("error", "executive-summary", f"attack_phases[{index}].color is invalid"))
-        for key in ("name", "icon", "date_range", "summary"):
-            if not isinstance(phase.get(key), str):
-                issues.append(issue("error", "executive-summary", f"attack_phases[{index}].{key} must be a string"))
-        if isinstance(phase.get("event_count"), bool) or not isinstance(phase.get("event_count"), int):
-            issues.append(issue("error", "executive-summary", f"attack_phases[{index}].event_count must be an integer"))
-        if not _is_string_list(phase.get("key_findings")):
-            issues.append(issue("error", "executive-summary", f"attack_phases[{index}].key_findings must be a string array"))
-        else:
-            for finding_id in sorted(set(phase["key_findings"]) - known_findings):
-                issues.append(issue("error", "executive-summary", f"attack_phases[{index}] references unknown finding {finding_id}"))
-    findings = data.get("key_findings")
-    if not isinstance(findings, list):
-        issues.append(issue("error", "executive-summary", "key_findings must be an array"))
-        findings = []
-    known_artifacts = {artifact_id for artifact_id, _ in entries}
-    for index, finding in enumerate(findings):
-        if not isinstance(finding, dict):
-            issues.append(issue("error", "executive-summary", f"key_findings[{index}] must be an object"))
-            continue
-        if finding.get("id") not in known_findings:
-            issues.append(issue("error", "executive-summary", f"key_findings[{index}] references unknown finding {finding.get('id')!r}"))
-        if finding.get("confidence") not in {"High", "Medium", "Low"}:
-            issues.append(issue("error", "executive-summary", f"key_findings[{index}].confidence is invalid"))
-        if not isinstance(finding.get("headline"), str):
-            issues.append(issue("error", "executive-summary", f"key_findings[{index}].headline must be a string"))
-        artifacts = finding.get("artifacts")
-        if not _is_string_list(artifacts):
-            issues.append(issue("error", "executive-summary", f"key_findings[{index}].artifacts must be a string array"))
-        else:
-            for artifact_id in sorted(set(artifacts) - known_artifacts):
-                issues.append(issue("error", "executive-summary", f"key_findings[{index}] references unknown artifact {artifact_id}"))
-    status = data.get("status")
-    if not isinstance(status, dict):
-        issues.append(issue("error", "executive-summary", "status must be an object"))
-    else:
-        for key in ("completed", "in_progress"):
-            if not _is_string_list(status.get(key)):
-                issues.append(issue("error", "executive-summary", f"status.{key} must be a string array"))
-        blocked = status.get("blocked")
-        valid_blocked = isinstance(blocked, list) and all(
-            isinstance(item, dict) and item.get("severity") in {"high", "medium", "low"}
-            and isinstance(item.get("item"), str) and isinstance(item.get("reason"), str)
-            for item in blocked
-        )
-        if not valid_blocked:
-            issues.append(issue("error", "executive-summary", "status.blocked does not match the v1 schema"))
-    if not _is_string_list(data.get("unresolved")):
-        issues.append(issue("error", "executive-summary", "unresolved must be a string array"))
-    return issues
+    known_findings = set()
+    section = read_mb("findings.md").split("## Gaps and Unanswered Questions", 1)[0]
+    for heading in re.findall(r"^### (.+)$", section, re.MULTILINE):
+        match = re.match(r"(F-\d{3})(?:\s*[:—]\s*|\s+)(.*)", heading)
+        known_findings.add(match[1] if match else heading.strip())
+    return [issue("error", "executive-summary", message) for message in projection_errors(
+        data, findings=known_findings, artifacts={artifact_id for artifact_id, _ in entries}
+    )]
 
 
 def run_all_checks() -> dict:
@@ -529,7 +473,7 @@ def run_all_checks() -> dict:
     ]
     all_issues = [item for group in checks for item in group]
     counts = Counter(item["severity"] for item in all_issues)
-    finding_ids = re.findall(r"^### F-\d{3}", read_mb("findings.md"), re.MULTILINE)
+    finding_ids = re.findall(r"^### (?!<).+", read_mb("findings.md").split("## Gaps and Unanswered Questions", 1)[0], re.MULTILINE)
     timeline_entries = re.findall(r"^### (?!<)", read_mb("timeline.md"), re.MULTILINE)
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

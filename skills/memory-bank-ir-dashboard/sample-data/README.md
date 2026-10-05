@@ -39,7 +39,8 @@ ransomware attack over the period of July 14–19, 2026.
 
 ## Usage
 
-1. Copy these files into your project's `incoming/` directory
-2. Run the intake process (via dashboard or `python scripts/intake.py`)
+1. Copy these files into your project's `.memory-bank/incoming/` directory
+2. Explicitly select these acquired demo artifacts in the dashboard intake view,
+   or run `python3 -B scripts/intake.py .memory-bank/incoming/selected-file.json`
 3. The dashboard will auto-detect the JSON files and display them in the Atomic Events viewer
 4. Use the global search to hunt across all data sources simultaneously

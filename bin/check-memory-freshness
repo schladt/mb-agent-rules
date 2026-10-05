@@ -1,133 +1,77 @@
-#!/usr/bin/env bash
-# Verify that changes to project files are accompanied by memory bank updates.
-#
-# Exit 0 if the checked change set is clean or includes a memory-bank/ update,
-# 1 if project files changed without one, 2 on usage/environment errors.
-set -euo pipefail
+#!/usr/bin/env python3
+"""Check Git-visible changes for an accompanying cognitive memory update.
 
-MODE="staged"
-RANGE=""
-QUIET=0
+An ignored local bank cannot be verified by Git. That case is reported as a skip,
+not as proof of freshness. Git errors always fail, including before a skip.
+"""
+import argparse
+from pathlib import Path, PurePosixPath
+import subprocess
+import sys
 
-usage() {
-  cat <<'USAGE'
-Usage:
-  check-memory-freshness [--staged | --worktree | --head | --range <A>..<B>] [--quiet]
 
-Checks a set of changed files and fails if any file outside memory-bank/ changed
-without a corresponding change inside memory-bank/.
+class GitError(Exception):
+    pass
 
-Modes:
-  --staged            staged changes (default; use as a pre-commit hook)
-  --worktree          all uncommitted changes, staged or not
-  --head              the most recent commit
-  --range <A>..<B>    an explicit commit range (use in CI)
 
-Options:
-  --quiet             suppress output; report only via exit code
+def git(*args, cwd=None):
+    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True)
+    if result.returncode:
+        raise GitError(result.stderr.decode(errors="replace").strip() or f"git {args[0]} failed")
+    return result.stdout
 
-Exit codes:
-  0  clean, memory bank was updated alongside the project changes, or the
-     memory bank is not tracked by git (nothing to verify)
-  1  project files changed with no memory bank update
-  2  usage or environment error
 
-Install as a pre-commit hook:
-  printf '#!/bin/sh\nexec check-memory-freshness --staged\n' > .git/hooks/pre-commit
-  chmod +x .git/hooks/pre-commit
-USAGE
-}
+def paths(root, *args):
+    return {p.decode(errors="surrogateescape") for p in git(*args, cwd=root).split(b"\0") if p}
 
-die() {
-  printf 'error: %s\n' "$*" >&2
-  exit 2
-}
 
-say() {
-  [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"
-}
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--staged", action="store_true", help="staged changes (default)")
+    modes.add_argument("--worktree", action="store_true", help="staged, unstaged and untracked files")
+    modes.add_argument("--head", action="store_true", help="HEAD against its first parent, including merges")
+    modes.add_argument("--range", metavar="A..B", help="explicit Git revision range")
+    parser.add_argument("--quiet", action="store_true")
+    args = parser.parse_args()
+    say = lambda text: None if args.quiet else print(text)
+    try:
+        root = Path(git("rev-parse", "--show-toplevel").decode().strip())
+        diff = ("--name-only", "-z", "--no-renames", "--diff-filter=ACMRDT")
+        if args.range is not None:
+            if not args.range or args.range.startswith("-") or ".." not in args.range:
+                raise GitError("--range requires a Git revision range such as A..B")
+            changed = paths(root, "diff", *diff, args.range, "--")
+        elif args.head:
+            parents = git("rev-list", "--parents", "-n", "1", "HEAD", "--", cwd=root).decode().split()
+            if len(parents) > 1:
+                changed = paths(root, "diff", *diff, parents[1], parents[0], "--")
+            else:
+                changed = paths(root, "diff-tree", "--root", "--no-commit-id", "-r", *diff, "HEAD", "--")
+        else:
+            changed = paths(root, "diff", "--cached", *diff, "--")
+            if args.worktree:
+                changed |= paths(root, "diff", *diff, "--")
+                changed |= paths(root, "ls-files", "--others", "--exclude-standard", "-z")
+        tracked = paths(root, "ls-files", "-z", "--", ".memory-bank")
+        if (root / ".memory-bank").is_dir() and not tracked:
+            say(".memory-bank/ is local and untracked; Git cannot verify its freshness. Skipping (not a freshness guarantee).")
+            return 0
+        project = sorted(p for p in changed if not p.startswith(".memory-bank/"))
+        if not project:
+            say("No project files changed outside .memory-bank/. OK.")
+            return 0
+        cognitive = {p for p in changed if PurePosixPath(p).parent == PurePosixPath(".memory-bank") and p.endswith(".md")}
+        if cognitive:
+            say(f"OK: {len(project)} project file(s) changed with a cognitive memory update.")
+            return 0
+        say("MEMORY BANK NOT UPDATED\nProject changes without an accompanying .memory-bank/*.md update:\n" + "\n".join("  " + repr(p) for p in project) + "\nUpdate activeContext and progress for the profile, then retry.")
+        return 1
+    except (GitError, OSError) as exc:
+        if not args.quiet:
+            print(f"error: {exc}", file=sys.stderr)
+        return 2
 
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    --staged|--worktree|--head)
-      MODE="${1#--}"
-      shift
-      ;;
-    --range)
-      [ "$#" -ge 2 ] || die "--range requires an argument"
-      MODE="range"
-      RANGE="$2"
-      shift 2
-      ;;
-    --quiet)
-      QUIET=1
-      shift
-      ;;
-    *)
-      die "unknown option: $1"
-      ;;
-  esac
-done
 
-command -v git >/dev/null 2>&1 || die "git is required"
-git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
-
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-
-# If the memory bank is not tracked by git (deliberately gitignored, or simply
-# never committed), git cannot observe updates to it and every check would fail.
-if [ -d "$REPO_ROOT/memory-bank" ] && [ -z "$(git -C "$REPO_ROOT" ls-files memory-bank)" ]; then
-  say "memory-bank/ is not tracked by git; nothing to verify. Skipping."
-  exit 0
-fi
-
-changed_files() {
-  case "$MODE" in
-    staged)
-      git diff --cached --name-only --diff-filter=ACMRD
-      ;;
-    worktree)
-      git diff HEAD --name-only --diff-filter=ACMRD
-      git ls-files --others --exclude-standard
-      ;;
-    head)
-      git show --pretty=format: --name-only --diff-filter=ACMRD HEAD
-      ;;
-    range)
-      git diff --name-only --diff-filter=ACMRD "$RANGE"
-      ;;
-  esac
-}
-
-CHANGED="$(changed_files | grep -v '^$' | sort -u || true)"
-
-if [ -z "$CHANGED" ]; then
-  say "No changes to check."
-  exit 0
-fi
-
-# Paths that never oblige a memory bank update: the bank itself and backups of it.
-MEMORY_CHANGES="$(printf '%s\n' "$CHANGED" | grep -E '^memory-bank/' || true)"
-PROJECT_CHANGES="$(printf '%s\n' "$CHANGED" | grep -Ev '^(memory-bank/|\.old/)' || true)"
-
-if [ -z "$PROJECT_CHANGES" ]; then
-  say "No project files changed outside memory-bank/. OK."
-  exit 0
-fi
-
-if [ -n "$MEMORY_CHANGES" ]; then
-  say "OK: $(printf '%s\n' "$PROJECT_CHANGES" | grep -c .) project file(s) changed, memory bank updated."
-  exit 0
-fi
-
-if [ "$QUIET" -ne 1 ]; then
-  printf 'MEMORY BANK NOT UPDATED\n'
-  printf 'These files changed with no accompanying memory-bank/ update:\n'
-  printf '%s\n' "$PROJECT_CHANGES" | sed 's/^/  /'
-  printf '\nUpdate at least activeContext and progress for your profile, then retry.\n'
-fi
-exit 1
+if __name__ == "__main__":
+    sys.exit(main())

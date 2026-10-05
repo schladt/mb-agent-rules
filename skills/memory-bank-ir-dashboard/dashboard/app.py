@@ -1,7 +1,7 @@
 """
 Incident Response Dashboard
 Live incident response dashboard with optional HTTPS and password auth.
-Reads directly from the memory-bank/ directory for always-current data.
+Reads directly from the .memory-bank/ directory for always-current data.
 """
 
 import os
@@ -25,10 +25,13 @@ from flask import (
 from werkzeug.security import generate_password_hash, check_password_hash
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-MEMORY_BANK = PROJECT_ROOT / "memory-bank"
-ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
-CERTS_DIR = Path(__file__).resolve().parent / "certs"
-CONFIG_FILE = PROJECT_ROOT / "dashboard.config.json"
+MEMORY_BANK = PROJECT_ROOT / ".memory-bank"
+ARTIFACTS_DIR = MEMORY_BANK / "artifacts"
+CERTS_DIR = MEMORY_BANK / "runtime/dashboard/certs"
+CONFIG_FILE = MEMORY_BANK / "dashboard.config.json"
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+sys.dont_write_bytecode = True
+from ir_common import canonical_path, parse_review_queue, projection_errors
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -160,7 +163,7 @@ def read_mb(filename: str) -> str:
 
 def contained_artifact_path(candidate: Path, *, must_exist: bool = True) -> Path | None:
     """Resolve a path and prove it remains beneath the artifact root."""
-    if ARTIFACTS_DIR.is_symlink():
+    if MEMORY_BANK.is_symlink() or ARTIFACTS_DIR.is_symlink():
         return None
     try:
         base = ARTIFACTS_DIR.resolve(strict=True)
@@ -299,14 +302,15 @@ def parse_findings() -> tuple[list[dict], list[dict]]:
     questions = []
     findings_section = content.split("## Entries")[-1] if "## Entries" in content else content
 
-    blocks = re.split(r"^### (F-\d{3})", findings_section, flags=re.MULTILINE)
+    entries_text = findings_section.split("## Gaps and Unanswered Questions", 1)[0]
+    blocks = re.split(r"^### (.+)$", entries_text, flags=re.MULTILINE)
     i = 1
     while i < len(blocks) - 1:
-        fid = blocks[i].strip()
+        heading = blocks[i].strip()
+        match = re.match(r"(F-\d{3})(?:\s*[:—]\s*|\s+)(.*)", heading)
+        fid = match[1] if match else heading
         body = blocks[i + 1].strip()
-        finding = {"id": fid, "fields": {}}
-        title_line = body.splitlines()[0] if body.splitlines() else ""
-        finding["title"] = re.sub(r"^[^a-zA-Z]*", "", title_line).strip()
+        finding = {"id": fid, "title": match[2] if match else heading, "fields": {}}
         for line in body.splitlines():
             m = re.match(r"^-\s+(.+?):\s+(.+)$", line.strip())
             if m:
@@ -422,80 +426,10 @@ def parse_scope_authorization() -> dict:
 
 
 def validate_executive_summary(value: object) -> dict | None:
-    """Accept only the documented v1 projection shape consumed by the UI."""
-    if not isinstance(value, dict) or value.get("schema_version") != 1:
-        return None
-    required_root = {
-        "schema_version", "generated_at", "narrative", "attack_phases",
-        "theory_summary", "key_findings", "status", "unresolved",
-    }
-    if not required_root.issubset(value):
-        return None
-    string_keys = ("generated_at", "narrative", "theory_summary")
-    if any(not isinstance(value.get(key, ""), str) for key in string_keys):
-        return None
-    try:
-        generated_at = datetime.fromisoformat(value["generated_at"].replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if generated_at.tzinfo is None or generated_at.utcoffset() != timezone.utc.utcoffset(generated_at):
-        return None
-    phases = value.get("attack_phases", [])
-    findings = value.get("key_findings", [])
-    status = value.get("status", {})
-    unresolved = value.get("unresolved", [])
-    if not isinstance(phases, list) or len(phases) > 20:
-        return None
-    if not isinstance(findings, list) or len(findings) > 100:
-        return None
-    if not isinstance(status, dict) or not isinstance(unresolved, list):
-        return None
-    if not all(isinstance(question, str) for question in unresolved):
-        return None
-    for phase in phases:
-        if not isinstance(phase, dict):
-            return None
-        if not {"name", "icon", "date_range", "color", "summary", "event_count", "key_findings"}.issubset(phase):
-            return None
-        if any(not isinstance(phase.get(key, ""), str) for key in ("name", "icon", "date_range", "color", "summary")):
-            return None
-        if phase.get("color", "") not in ("", "warning", "danger", "purple", "success", "info", "accent"):
-            return None
-        if isinstance(phase.get("event_count"), bool) or not isinstance(phase.get("event_count"), int) or phase["event_count"] < 0:
-            return None
-        if not isinstance(phase.get("key_findings", []), list) or not all(
-            isinstance(item, str) for item in phase.get("key_findings", [])
-        ):
-            return None
-    for finding in findings:
-        if not isinstance(finding, dict):
-            return None
-        if not {"id", "headline", "confidence", "artifacts"}.issubset(finding):
-            return None
-        if any(not isinstance(finding.get(key, ""), str) for key in ("id", "headline", "confidence")):
-            return None
-        if finding.get("confidence", "") not in ("High", "Medium", "Low"):
-            return None
-        if not isinstance(finding.get("artifacts", []), list) or not all(
-            isinstance(item, str) for item in finding.get("artifacts", [])
-        ):
-            return None
-    if not {"completed", "in_progress", "blocked"}.issubset(status):
-        return None
-    for key in ("completed", "in_progress"):
-        if not isinstance(status.get(key, []), list) or not all(isinstance(item, str) for item in status.get(key, [])):
-            return None
-    blocked = status.get("blocked", [])
-    if not isinstance(blocked, list):
-        return None
-    for item in blocked:
-        if not isinstance(item, dict) or any(not isinstance(item.get(key, ""), str) for key in ("item", "severity", "reason")):
-            return None
-        if not {"item", "severity", "reason"}.issubset(item):
-            return None
-        if item.get("severity", "") not in ("high", "medium", "low"):
-            return None
-    return value
+    findings, _ = parse_findings()
+    errors = projection_errors(value, findings={row["id"] for row in findings},
+                               artifacts=set(parse_evidence_index()))
+    return None if errors else value
 
 
 def _known_affected(rows: list[dict]) -> int:
@@ -562,56 +496,20 @@ def build_executive_summary(brief, findings, timeline, evidence, assets, context
     else:
         summary["ai"] = None
 
-    # Fallback: build attack phases from timeline keywords if no AI summary
-    if not summary["ai"]:
-        summary["working_theory"] = context.get("Working Theory", "")
-        summary["pending_approvals"] = context.get(
-            "Pending Approvals", context.get("Pending Approvals / Action Items", "")
-        )
-        phase_keywords = {
-            "Recon": ["recon", "sspr", "credential stuff", "password spray", "bav2ropc", "scanning"],
-            "Initial Access": ["vishing", "initial access", "phishing", "login", "brute force"],
-            "Persistence": ["mfa", "oath", "token", "persistence", "registration", "backdoor"],
-            "Lateral Movement": ["lateral", "pivoting", "pass-the-hash", "rdp"],
-            "Exfiltration": ["exfiltrat", "download", "file access", "staging", "upload"],
-            "Impact": ["extortion", "ransomware", "encrypt", "ransom", "wiper", "destruction"],
-            "Remediation": ["password reset", "remediat", "containment", "blocked", "rebuilt"],
-        }
-        phases = []
-        for phase_name, keywords in phase_keywords.items():
-            phase_events = []
-            for e in timeline:
-                title_lower = (e.get("title", "") + " " + e.get("event", "")).lower()
-                if any(kw in title_lower for kw in keywords):
-                    phase_events.append(e)
-            if phase_events:
-                dates = [e.get("time", "") for e in phase_events if e.get("time")]
-                date_range = ""
-                if dates:
-                    first = min(dates)[:10]
-                    last = max(dates)[:10]
-                    date_range = first if first == last else f"{first} – {last}"
-                phases.append({
-                    "name": phase_name,
-                    "date_range": date_range,
-                    "event_count": len(phase_events),
-                    "summary": phase_events[0].get("title", ""),
-                })
-        summary["attack_phases"] = phases
+    # Only an explicit, validated analytical projection may assert attack phases.
+    summary["attack_phases"] = []
+    summary["working_theory"] = context.get("Working Theory", "")
+    summary["pending_approvals"] = context.get("Pending Approvals", "")
+    summary["projection_error"] = (
+        "executiveSummary.json is invalid; analytical projection unavailable"
+        if ai_path.exists() and summary["ai"] is None else ""
+    )
 
     return summary
 
 
 def extract_key_metrics(findings: list[dict], assets: dict, timeline: list[dict]) -> dict:
     metrics = {}
-    for d in assets.get("data", []):
-        vol = d.get("Volume / record count", "")
-        m = re.search(r"([\d,]+)\s*(?:downloads|files)", vol, re.IGNORECASE)
-        if m:
-            metrics["files_downloaded"] = m.group(1)
-        m2 = re.search(r"([\d,]+)\s*(?:SharePoint\s*sites|sites|servers|hosts)", vol, re.IGNORECASE)
-        if m2:
-            metrics["sites_affected"] = m2.group(1)
     attacker_times = [
         parsed for event in timeline
         if event.get("actor", "").strip().lower() == "attacker"
@@ -648,6 +546,12 @@ def get_dashboard_data() -> dict:
         brief, findings, timeline, evidence, assets, context, iocs
     )
 
+    status_path = MEMORY_BANK / "project-status.md"
+    execution_status = {
+        "source": ".memory-bank/project-status.md",
+        "content": read_mb("project-status.md"),
+        "error": "" if status_path.is_file() else "Execution-status authority is missing",
+    }
     return {
         "brief": brief,
         "timeline": timeline,
@@ -663,6 +567,7 @@ def get_dashboard_data() -> dict:
         "attacker_ips": sorted(get_attacker_ips()),
         "key_metrics": extract_key_metrics(findings, assets, timeline),
         "executive_summary": exec_summary,
+        "execution_status": execution_status,
         "config": DASHBOARD_CONFIG,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -1100,7 +1005,10 @@ def download_artifact(art_id):
     stored = evidence[art_id].get("stored_path", "")
     if not stored:
         abort(404)
-    filepath = contained_artifact_path(PROJECT_ROOT / stored)
+    try:
+        filepath = contained_artifact_path(canonical_path(PROJECT_ROOT, stored))
+    except (OSError, ValueError):
+        filepath = None
     if filepath is None:
         abort(404)
     app.logger.info("artifact download id=%s remote=%s", art_id, request.remote_addr)
@@ -1115,79 +1023,59 @@ def api_sync_check():
     return jsonify(sync_check.run_all_checks())
 
 
+@app.route("/api/incoming")
+@require_auth
+def api_incoming():
+    incoming = MEMORY_BANK / "incoming"
+    if incoming.is_symlink():
+        return jsonify({"error": "Incoming store must not be a symlink"}), 409
+    drops = [] if not incoming.exists() else [
+        {"name": p.name, "selectable": p.is_file() and not p.is_symlink()}
+        for p in sorted(incoming.iterdir()) if p.name != ".gitkeep"
+    ]
+    return jsonify({"drops": drops})
+
+
 @app.route("/api/intake", methods=["POST"])
 @require_auth
 def api_intake():
-    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
     import intake
-    incoming = PROJECT_ROOT / "incoming"
-    if not incoming.exists():
-        return jsonify({"results": [], "message": "No incoming/ directory"})
-    files = sorted(f for f in incoming.iterdir() if f.is_file() and not f.name.startswith("."))
-    if not files:
-        return jsonify({"results": [], "message": "No files to process"})
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Intake request must be an object"}), 400
+    names = payload.get("files", [])
+    if not isinstance(names, list) or any(not isinstance(n, str) or Path(n).name != n or n in ("", ".", "..") for n in names):
+        return jsonify({"error": "Select explicit incoming evidence filenames"}), 400
+    if names and payload.get("kind") != "artifact":
+        return jsonify({"error": "Selected files must be explicitly classified as acquired evidence"}), 400
+    files = [MEMORY_BANK / "incoming" / name for name in dict.fromkeys(names)]
     try:
         results = intake.ingest_files(files)
     except (OSError, RuntimeError, ValueError) as exc:
         app.logger.exception("evidence intake transaction failed")
         return jsonify({"results": [], "ingested": 0, "failed": len(files), "error": str(exc)}), 409
-    ok = [r for r in results if "error" not in r and r.get("verified", True)]
-    app.logger.info("evidence intake remote=%s ingested=%d failed=%d", request.remote_addr, len(ok), len(results) - len(ok))
-    public_results = []
-    for result in results:
-        public_results.append({key: value for key, value in result.items() if key in {
-            "artifact_id", "original_name", "sha256", "verified", "ingest_utc",
-            "stored_path", "size", "error",
-        }})
+    ok = [r for r in results if "error" not in r and r.get("verified") is True]
+    public_results = [{key: value for key, value in result.items() if key in {
+        "artifact_id", "original_name", "sha256", "verified", "ingest_utc",
+        "stored_path", "size", "error",
+    }} for result in results]
     return jsonify({
-        "results": public_results,
-        "ingested": len(ok),
-        "failed": len(results) - len(ok),
-        "message": f"{len(ok)} file(s) ingested; analysis remains pending in the review queue" if ok else "No files ingested successfully",
-    })
+        "results": public_results, "ingested": len(ok), "failed": len(results) - len(ok),
+        "message": f"{len(ok)} acquired; analysis pending. Unselected drops remain pending.",
+        "error": "; ".join(r["error"] for r in results if "error" in r),
+    }), 409 if len(ok) != len(results) else 200
 
 
 @app.route("/api/review-queue")
 @require_auth
 def api_review_queue():
-    content = read_mb("reviewQueue.md")
-    items = []
-    blocks = re.split(r"^### (RQ-\d{3})\s*\u2014\s*(.+?)$", content, flags=re.MULTILINE)
-    i = 1
-    while i < len(blocks) - 1:
-        rq_id = blocks[i].strip()
-        title = blocks[i + 1].strip()
-        body = blocks[i + 2] if i + 2 < len(blocks) else ""
-        block_pos = content.find(f"### {rq_id}")
-        done_pos = content.find("## Done")
-        section = "done" if (done_pos != -1 and block_pos > done_pos) else "pending"
-        status_m = re.search(r"- Status:\s*(\w+)", body)
-        status = status_m.group(1) if status_m else "PENDING"
-        checked = len(re.findall(r"- \[x\]", body))
-        unchecked = len(re.findall(r"- \[ \]", body))
-        added_m = re.search(r"- Added:\s*(.+)", body)
-        added = added_m.group(1).strip() if added_m else ""
-        items.append({
-            "id": rq_id,
-            "title": title,
-            "status": status,
-            "section": section,
-            "checked": checked,
-            "unchecked": unchecked,
-            "total_tasks": checked + unchecked,
-            "added": added,
-        })
-        i += 3
-
-    pending = [it for it in items if it["section"] == "pending"]
-    done = [it for it in items if it["section"] == "done"]
-    total_unchecked = sum(it["unchecked"] for it in pending)
-
+    items = parse_review_queue(read_mb("reviewQueue.md"))
+    pending = [item for item in items if item["section"] == "pending"]
     return jsonify({
-        "pending": pending,
-        "done": done,
+        "pending": pending, "done": [item for item in items if item["section"] == "done"],
         "total_pending": len(pending),
-        "total_unchecked_tasks": total_unchecked,
+        "total_unchecked_tasks": sum(item["unchecked"] for item in pending),
+        "errors": [f"{item['id']}: {error}" for item in items for error in item["errors"]],
     })
 
 

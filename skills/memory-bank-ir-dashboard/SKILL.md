@@ -1,238 +1,157 @@
 ---
 name: memory-bank-ir-dashboard
-description: Set up and operate the optional local incident-response dashboard and evidence pipeline. Use when an incident-response project needs evidence intake, investigation visualization, event search, or dashboard operation.
+description: Set up and operate the optional private-development incident-response dashboard and classified evidence pipeline. Use for evidence intake, investigation visualization, event search, and preservation-aware deployment upgrades.
 ---
 
-# IR Dashboard Skill
+# IR Dashboard
 
-Procedures for setting up and operating the incident response dashboard — a live
-web application that reads directly from the memory bank and artifact store to
-provide a visual interface for the investigation.
+Read project `AGENTS.md` and authority files first. This optional Flask dashboard
+is a private development tool, not production infrastructure or an external
+client-status publisher. Python 3.10+, Flask and cryptography are required; the
+launcher provisions dependencies locally. No external APIs or uploads are used.
 
-## When to Use
+## Setup and upgrade
 
-Use this skill when:
-- Setting up a new incident response project that needs a visual dashboard
-- The user asks to visualize the investigation, browse evidence, or search events
-- The incident has accumulated enough data (timeline entries, findings, artifacts)
-  that a dashboard would improve situational awareness
-
-## Prerequisites
-
-- An incident-response memory bank must be initialized (`AGENTS.md` with the
-  incident-response profile, `memory-bank/` with the required files)
-- Python 3.10+ available on the system
-- `flask` and `cryptography` packages (auto-installed by `start.sh`)
-
-## Setup
-
-### Automated Setup
-
-Run the setup script from the `mb-agent-rules` repository:
+Initialize the incident-response profile with `.memory-bank/` first. Legacy
+projects must run the installer’s explicit `--migrate` flow before setup; there
+is no old-bank fallback.
 
 ```bash
 bash /path/to/mb-agent-rules/skills/memory-bank-ir-dashboard/setup.sh /path/to/project \
-  --title "Operation Cobalt" \
-  --brand "Security Team" \
-  --accent "#10b981" \
-  --with-sample-data
+  --title "Operation Cobalt" --brand "Security Team" --accent "#10b981"
 ```
 
-This copies the dashboard, scripts, and configuration into the project.
+Setup deploys the complete `dashboard/` and `scripts/` packages, including
+`ir_common.py`. These source files remain trackable. Configuration lives at
+`.memory-bank/dashboard.config.json`; certificates, virtual environment, cache,
+and deployment receipt live beneath `.memory-bank/runtime/dashboard/`.
+Custody manifest, transaction journal and intake lock live in
+`.memory-bank/artifacts/`. Only `/.memory-bank/` is added to `.gitignore`;
+existing user exclusions are preserved.
 
-### Manual Setup
+Re-running setup updates unchanged managed code. Locally modified or
+unrecognized managed files cause a conflict before code replacement. Review
+those changes, then use `--upgrade` to authorize replacement: previous changed
+files are copied beneath `.memory-bank/backups/dashboard-<timestamp>-*/` before
+any replacement. Unrelated user files are never removed. Do not delete the
+existing dashboard to reinstall. Configuration is preserved; `--shared-group`
+explicitly enables 0770/0660 handling rather than default 0700/0600.
 
-1. Copy `skills/memory-bank-ir-dashboard/dashboard/` → `<project>/dashboard/`
-2. Copy `skills/memory-bank-ir-dashboard/scripts/` → `<project>/scripts/`
-3. Create `<project>/incoming/` and `<project>/artifacts/`
-4. Create `<project>/dashboard.config.json` with branding preferences
-5. Create `<project>/memory-bank/reviewQueue.md` from the template
-6. Confirm `.agents/skills/memory-bank-ir-evidence-review/SKILL.md` is installed
-7. Add evidence and dashboard runtime paths to `.gitignore`
+`--with-sample-data` copies synthetic samples to the bank incoming directory
+without overwriting existing drops. It does not classify or ingest them.
 
-### Configuration
-
-Create `dashboard.config.json` at the project root:
-
-```json
-{
-  "title": "Operation Name — IR Dashboard",
-  "brand": "Your Team",
-  "accent_color": "#3b82f6",
-  "logo_url": "",
-  "shared_group_access": false,
-  "atomic_max_file_bytes": 104857600,
-  "atomic_max_records": 250000,
-  "atomic_max_fields": 250,
-  "css_overrides": {
-    "bg": "#0a0e14",
-    "surface": "#111827"
-  }
-}
-```
-
-| Key | Description | Default |
-|-----|-------------|---------|
-| `title` | Dashboard title (header + browser tab) | `IR Dashboard` |
-| `brand` | Small uppercase text in header left corner | _(empty)_ |
-| `accent_color` | Primary UI accent color (hex) | `#3b82f6` |
-| `logo_url` | `/static/` path or `data:image/` URL | _(empty)_ |
-| `css_overrides` | Map of CSS custom property names to values | `{}` |
-| `shared_group_access` | Use 0770/0660 instead of private 0700/0600 evidence modes | `false` |
-| `atomic_max_file_bytes` | Maximum JSON event-source size | 100 MiB |
-| `atomic_max_records` | Maximum records per JSON event source | 250,000 |
-| `atomic_max_fields` | Maximum union of fields per source | 250 |
-
-Available CSS variables for `css_overrides`: `bg`, `surface`, `surface-raised`,
-`border`, `border-light`, `text`, `text-secondary`, `text-dim`, `accent`,
-`danger`, `warning`, `success`, `info`, `purple`.
-
-## Starting the Dashboard
+## Run
 
 ```bash
-cd <project>/dashboard
-bash start.sh --port 8443
+bash dashboard/start.sh --port 8443
 ```
 
-Options:
-- `--port <N>` — listen port (default: 8443)
-- `--host <addr>` — bind address (default: 127.0.0.1)
-- `--password <pw>` — dashboard password (auto-generated if omitted)
-- `--no-ssl` — disable HTTPS (use HTTP)
-- `--no-auth` — disable password authentication entirely
-- `--allow-insecure-remote` — explicit acknowledgement required if a
-  non-loopback bind is combined with `--no-ssl` or `--no-auth`
+Options: `--host` (default 127.0.0.1), `--port` (8443), `--password`, `--no-ssl`,
+`--no-auth`. Prefer `DASHBOARD_PASSWORD` over a command-line password. Remote
+binding without TLS or authentication requires `--allow-insecure-remote`.
+Cookies are HttpOnly, SameSite=Lax, and Secure with TLS. Unsafe methods use CSRF
+protection, login attempts are rate-limited, and TLS defaults to a local
+self-signed certificate. These safeguards do not make this a production server.
 
-Environment variable `DASHBOARD_PASSWORD` is also supported and is preferred
-over `--password`, which can expose a secret in process listings or shell history.
+## Configuration
 
-## Dashboard Tabs
+`.memory-bank/dashboard.config.json` accepts:
 
-| Tab | Data Source | Description |
-|-----|------------|-------------|
-| Executive Summary | `incidentBrief.md`, all files | Dynamic overview with metrics, classification, and verification status |
-| Timeline | `timeline.md` | Chronological events with actor filtering and artifact links |
-| Evidence | `evidenceIndex.md` | All indexed artifacts with hash verification and download |
-| Findings | `findings.md` | Analytical conclusions with expandable details |
-| Questions | `findings.md` (gaps section) | Open and answered investigation questions |
-| IOCs & TTPs | `indicators.md` | Indicator tables and ATT&CK technique mapping |
-| Assets | `affectedAssets.md` | Systems, accounts, and data with status tracking |
-| Theory & Plan | `activeContext.md` | Working theory, current objective, and blockers |
-| Next Steps | `activeContext.md` | Prioritized action items parsed from context |
+| Key | Default / meaning |
+|---|---|
+| `title` | `IR Dashboard` |
+| `brand` | Empty brand text |
+| `accent_color` | `#3b82f6`, 3/6/8-digit hex color |
+| `logo_url` | Empty; otherwise `/static/` or `data:image/` |
+| `css_overrides` | Empty map; supported theme variables only |
+| `shared_group_access` | `false`; explicit group access policy |
+| `atomic_max_file_bytes` | 104857600 |
+| `atomic_max_records` | 250000 |
+| `atomic_max_fields` | 250 |
 
-## Atomic Event Viewer
+## Classified evidence intake
 
-The Timeline tab includes an Atomic Events toggle that provides a raw event
-browser for JSON data sources in `artifacts/`.
-
-**Auto-detection**: Any contained, non-symlink JSON file in `artifacts/` within
-the configured size/record/field bounds and with a `Timestamp`, `Time`,
-`CreatedDateTime`, or `EventTime` field is discovered as a data source.
-
-**Features**:
-- Dynamic filter dropdowns (searchable, with attacker IP highlighting)
-- Time range selection with histogram visualization
-- Global search across all data sources simultaneously
-- Click any row for full detail in the side panel
-- Attacker IP rows highlighted in red
-
-**Adding new data sources**: Drop any JSON file with timestamped records into
-`artifacts/`. It appears in the dropdown immediately — no code changes needed.
-
-## Evidence Intake Pipeline
-
-### Via Dashboard
-
-Click **Sync Check** → **Run Intake** in the dashboard header.
-
-### Via Command Line
+Incoming is `.memory-bank/incoming/`, shared with reference and operational
+intake. Do not treat every drop as incident evidence. **Sync Check → Run Intake**
+opens a selection view: choose only acquired evidence, then acquire the selected
+files. Unselected files, hidden drops and nested directories remain visible and
+pending. Operational credentials and reference material use the shared
+`memory-bank-workflow` classified intake instead. Selecting evidence authorizes
+its custody acquisition and source removal only after the verified transaction
+commits; acquisition is distinct from optional reference archival and analysis.
 
 ```bash
-python scripts/intake.py                    # process all files in incoming/
-python scripts/intake.py --dry-run          # preview without processing
-python scripts/intake.py path/to/file.json  # process a specific file
-python scripts/intake.py --provided-by "Analyst Name" --source-system "EDR export"
+python3 -B scripts/intake.py .memory-bank/incoming/selected-evidence.json
+python3 -B scripts/intake.py --dry-run path/to/selected-evidence.json
+python3 -B scripts/intake.py --provided-by "Analyst" --source-system "EDR export" path/to/evidence.json
+python3 -B scripts/intake.py --retain-source --json path/to/evidence.json
+python3 -B scripts/intake.py  # recover any pending transaction; never bulk-ingest drops
 ```
 
-### Intake Steps
+Positional files are an explicit acquired-evidence classification. `--dry-run`
+hashes the source but performs no copying, recovery, ID reservation or writes;
+its receipt has `verified: false`, `source_hashed: true`, and proposed IDs.
+`--retain-source` leaves incoming evidence in place for the shared workflow’s
+separate authorized disposition. `--json` emits
+`{"results":[...],"ingested":N,"failed":N}`. A committed result includes
+`artifact_id`, project-relative `stored_path`, `sha256`, and `verified: true`.
+Failures exit nonzero; never interpret a preview or failed acquisition as custody.
 
-1. Take an exclusive project intake lock and recover any journaled transaction
-2. Compute the source SHA-256 and UTC intake timestamp
-3. Copy to a private pending file and re-hash the copy
-4. Allocate sequential artifact and queue IDs while still holding the lock
-5. Persist a recovery journal, place artifacts, and atomically update
-   `evidenceIndex.md`, `reviewQueue.md`, and `progress.md`
-6. Append a hash-chained transaction to `artifacts/.custody-manifest.jsonl`
-7. Remove an `incoming/` source only after the full metadata commit
+Real intake:
+1. Locks the artifact store and recovers a journal even when incoming is empty.
+2. Hashes a stable source, copies to a private pending artifact, re-hashes it.
+3. Allocates ART and RQ IDs under the lock and writes a recovery journal.
+4. Places evidence, appends the hash-chained custody transaction, and atomically
+   updates `evidenceIndex.md`, `reviewQueue.md`, and `progress.md`.
+5. Removes an unchanged incoming source only after the complete commit, unless
+   `--retain-source` was selected. External sources are retained.
 
-A mismatch preserves the source and quarantines the failed copy. Intake records
-custody and queues analysis; it never infers event times, relevance, findings, or
-IOCs. Use the installed `memory-bank-ir-evidence-review` skill to perform that judgment-bearing
-work when an analyst asks for it.
+Mismatches preserve the source and quarantine the bad copy. Interrupted
+transactions retain stable artifact/queue IDs and transaction identity. Existing
+custody bytes and hashes are never rewritten for migration: an explicit
+`.memory-bank/path-migrations.json` receipt resolves historical paths into the
+canonical bank, not into old stores. For stronger custody, anchor manifest hashes
+in an external immutable case system; a local chain alone cannot prove no whole
+file truncation or replacement occurred.
 
-The custody manifest detects interior edits and reordering. It is stored beside
-the evidence, so a higher-assurance deployment should copy each latest manifest
-hash into an external immutable case-management or logging system; a local chain
-alone cannot prove that the entire file was replaced or truncated.
+## Review, status and executive narrative
 
-### Review Queue
+Acquisition queues analysis; it does not infer event times, relevance, findings,
+IOCs, exfiltration or attack phases. Ask the `memory-bank-ir-evidence-review`
+skill to perform authorized inert analysis. Queue state comes from explicit
+PENDING / IN_PROGRESS / DONE plus the checklist, never section location alone.
+DONE requires a nonempty, fully checked checklist. Section/status contradictions
+are displayed and reported by Sync Check rather than silently hiding work.
 
-After intake, artifacts are placed in a review queue (`reviewQueue.md`). Each
-entry includes a checklist:
-- Assess relevance
-- Place events on timeline
-- Record findings
-- Extract IOCs
-- Update active context
+The dashboard reads investigative records from the bank. Executive narrative
+is the internal derived `executiveSummary.json`, validated by the same schema
+and reference validator used by Sync Check. Invalid projections are visibly
+unavailable. Without one, only documented facts/theory are shown; there is no
+keyword-generated attack phase or inventory-to-exfiltration inference.
 
-The dashboard shows a badge on the Queue button when items are pending.
+Execution status is shown directly from `.memory-bank/project-status.md`, the
+single execution-status authority. The analytical JSON `status` member is
+retained as a schema-required investigative snapshot, not displayed as a competing
+execution source. The dashboard does not publish external `project-status.md`.
+Use the shared workflow’s `status` / `status --check` commands for that projection.
 
-## Sync Check
+## Atomic event viewer and checks
 
-The consistency validator checks operational authority/readiness fields,
-required schemas, artifact custody fields and streaming hashes, path containment,
-symlinks, permissions, interrupted transactions, orphans/quarantine, dangling
-references, ART/F/RQ ID integrity, review queue status, and the complete
-`executiveSummary.json` schema and references.
+Contained, non-symlink JSON files in `.memory-bank/artifacts/` within configured
+bounds are discovered automatically when records have a supported timestamp
+field. Use custody intake rather than dropping unindexed originals directly into
+the artifact store. Evidence fields are literal inert text, including quoted
+attribute values. The viewer supports dynamic filters, UTC ranges with minute or
+second precision, global search, histogram navigation and event detail. Invalid
+queries and non-success API responses are displayed as errors, not zero results.
 
-Run from CLI:
 ```bash
-python scripts/sync_check.py          # human-readable report
-python scripts/sync_check.py --json   # JSON for programmatic use
+python3 -B scripts/sync_check.py
+python3 -B scripts/sync_check.py --json
 ```
 
-Or click **Sync Check** in the dashboard header.
-
-## Executive Summary
-
-The Executive Summary tab is driven by `memory-bank/executiveSummary.json`,
-an AI-generated file that contains structured narrative content, attack phase
-summaries, curated key findings, investigation status, and unresolved questions.
-
-This file is generated by the `memory-bank-ir-evidence-review` skill as the final step of
-post-intake analysis. If the file does not exist, the dashboard falls back to
-parsing raw markdown from the memory bank files.
-
-See `skills/memory-bank-ir-evidence-review/SKILL.md` for the JSON schema and writing guidelines.
-
-## Sample Data
-
-The `sample-data/` directory contains a synthetic ransomware scenario for
-demo purposes. See `sample-data/README.md` for details.
-
-To load it during setup:
-```bash
-bash setup.sh /path/to/project --with-sample-data
-```
-
-Or manually copy the JSON files to `<project>/incoming/` and run intake.
-
-## Constraints
-
-- The dashboard is read-only outside explicit intake, which transactionally
-  updates `evidenceIndex.md`, `reviewQueue.md`, and `progress.md`
-- All data is served from the local filesystem — no external API calls
-- Session cookies use `HttpOnly`, `SameSite=Lax`, and `Secure` under HTTPS;
-  unsafe methods are CSRF protected and login attempts are rate-limited
-- HTTPS uses auto-generated self-signed certificates (production deployments
-  should provide real certificates)
+Sync Check reports authority/readiness, schema, custody hashes and transaction
+chain, containment/symlinks/permissions, pending transaction, orphan/quarantine,
+ART/F/RQ references, queue consistency, all pending incoming drops, and the
+shared executive projection validator. Actual errors remain errors regardless of
+soft repository conventions. See `DASHBOARD.md` for API contracts.

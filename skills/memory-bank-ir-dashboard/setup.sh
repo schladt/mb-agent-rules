@@ -1,256 +1,144 @@
 #!/usr/bin/env bash
-# Sets up the IR Dashboard in a project that uses the incident-response memory bank profile.
-# Run from the mb-agent-rules repo: bash skills/memory-bank-ir-dashboard/setup.sh /path/to/project
+# Install/update private-development dashboard code; preserve changed files before replacement.
 set -euo pipefail
-
 SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-usage() {
-  echo "Usage: $0 <project-root> [options]"
-  echo ""
-  echo "Options:"
-  echo "  --title <title>       Dashboard title (default: IR Dashboard)"
-  echo "  --brand <brand>       Brand text in header (optional)"
-  echo "  --accent <hex>        Accent color (default: #3b82f6)"
-  echo "  --logo <path-or-data> /static/ path or data:image URL (optional)"
-  echo "  --shared-group        Use group-readable evidence modes (0770/0660)"
-  echo "  --with-sample-data    Copy sample data into incoming/ for demo"
-  echo "  --help                Show this help"
-  exit 1
-}
-
-if [ $# -lt 1 ] || [ "$1" = "--help" ]; then
-  usage
-fi
-
-PROJECT_ROOT="$1"
-shift
-
-TITLE="IR Dashboard"
-BRAND=""
-ACCENT="#3b82f6"
-LOGO=""
-SAMPLE_DATA=false
-SHARED_GROUP=false
-SHARED_GROUP_SET=false
-
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --title|--brand|--accent|--logo)
-      [ $# -ge 2 ] || { echo "Option $1 requires a value"; exit 2; }
-      case "$1" in
-        --title) TITLE="$2" ;;
-        --brand) BRAND="$2" ;;
-        --accent) ACCENT="$2" ;;
-        --logo) LOGO="$2" ;;
-      esac
-      shift 2
-      ;;
-    --shared-group) SHARED_GROUP=true; SHARED_GROUP_SET=true; shift ;;
-    --with-sample-data) SAMPLE_DATA=true; shift ;;
-    *) echo "Unknown option: $1"; usage ;;
-  esac
-done
-
-if [ ! -d "$PROJECT_ROOT" ]; then
-  echo "Error: Project root '$PROJECT_ROOT' does not exist."
-  exit 1
-fi
-
-python3 - "$ACCENT" "$LOGO" <<'PYVALIDATE'
-import re
-import sys
-
-accent, logo = sys.argv[1:]
-if not re.fullmatch(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?(?:[0-9a-fA-F]{2})?", accent):
-    raise SystemExit("--accent must be a 3, 6, or 8 digit hex color")
-if logo and not (logo.startswith("/static/") or logo.startswith("data:image/")):
-    raise SystemExit("--logo must be a /static/ path or data:image URL")
-PYVALIDATE
-
-CONFIG_FILE="$PROJECT_ROOT/dashboard.config.json"
-if [ "$SHARED_GROUP_SET" = false ] && [ -f "$CONFIG_FILE" ]; then
-  SHARED_GROUP="$(python3 - "$CONFIG_FILE" <<'PYREAD'
-import json
-import sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        config = json.load(handle)
-    value = config.get("shared_group_access", False) is True
-except (OSError, ValueError, AttributeError):
-    value = False
-print("true" if value else "false")
-PYREAD
-)"
-fi
-
-echo ""
-echo "============================================================"
-echo "  IR Dashboard Setup"
-echo "============================================================"
-echo "  Project    : $PROJECT_ROOT"
-echo "  Title      : $TITLE"
-echo "  Accent     : $ACCENT"
-if [ -n "$BRAND" ]; then echo "  Brand      : $BRAND"; fi
-if [ -n "$LOGO" ];  then echo "  Logo       : $LOGO"; fi
-echo "============================================================"
-echo ""
-
-# Copy dashboard
-if [ -d "$PROJECT_ROOT/dashboard" ]; then
-  echo "  ⚠  dashboard/ already exists — skipping (delete it first to reinstall)"
-else
-  cp -r "$SKILL_DIR/dashboard" "$PROJECT_ROOT/dashboard"
-  chmod +x "$PROJECT_ROOT/dashboard/start.sh"
-  echo "  ✓  Copied dashboard/"
-fi
-
-# Copy scripts (merge if exists)
-mkdir -p "$PROJECT_ROOT/scripts"
-for script in intake.py sync_check.py; do
-  if [ ! -f "$PROJECT_ROOT/scripts/$script" ]; then
-    cp "$SKILL_DIR/scripts/$script" "$PROJECT_ROOT/scripts/$script"
-    echo "  ✓  Copied scripts/$script"
-  else
-    echo "  ⚠  scripts/$script already exists — skipping"
-  fi
-done
-
-# Create sensitive directories with explicit deployment-appropriate modes.
-for sensitive_dir in "$PROJECT_ROOT/incoming" "$PROJECT_ROOT/artifacts"; do
-  if [ -L "$sensitive_dir" ]; then
-    echo "Error: sensitive directory must not be a symlink: $sensitive_dir"
-    exit 1
-  fi
-done
-mkdir -p "$PROJECT_ROOT/incoming" "$PROJECT_ROOT/artifacts"
-if [ "$SHARED_GROUP" = true ]; then
-  find "$PROJECT_ROOT/incoming" "$PROJECT_ROOT/artifacts" -type d -exec chmod 0770 {} +
-  find "$PROJECT_ROOT/incoming" "$PROJECT_ROOT/artifacts" -type f -exec chmod 0660 {} +
-else
-  find "$PROJECT_ROOT/incoming" "$PROJECT_ROOT/artifacts" -type d -exec chmod 0700 {} +
-  find "$PROJECT_ROOT/incoming" "$PROJECT_ROOT/artifacts" -type f -exec chmod 0600 {} +
-fi
-echo "  ✓  Created incoming/ and artifacts/"
-
-# Create dashboard.config.json
-if [ ! -f "$CONFIG_FILE" ]; then
-  python3 - "$CONFIG_FILE" "$TITLE" "$BRAND" "$ACCENT" "$LOGO" "$SHARED_GROUP" <<'PYCONFIG'
-import json
-import sys
-
-path, title, brand, accent, logo, shared = sys.argv[1:]
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump({
-        "title": title,
-        "brand": brand,
-        "accent_color": accent,
-        "logo_url": logo,
-        "css_overrides": {},
-        "shared_group_access": shared == "true",
-        "atomic_max_file_bytes": 104857600,
-        "atomic_max_records": 250000,
-        "atomic_max_fields": 250,
-    }, handle, indent=2)
-    handle.write("\n")
-PYCONFIG
-  echo "  ✓  Created dashboard.config.json"
-else
-  if [ "$SHARED_GROUP_SET" = true ]; then
-    python3 - "$CONFIG_FILE" <<'PYUPDATE'
+export PYTHONDONTWRITEBYTECODE=1
+exec python3 - "$SKILL_DIR" "$@" <<'PY'
+import argparse
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
+from pathlib import Path
+import re
+import shutil
 import sys
 import tempfile
 
-path = sys.argv[1]
-with open(path, encoding="utf-8") as handle:
-    config = json.load(handle)
+source = Path(sys.argv.pop(1))
+parser = argparse.ArgumentParser(description='Install/update the optional private-development IR dashboard')
+parser.add_argument('project_root', type=Path)
+parser.add_argument('--title', default='IR Dashboard')
+parser.add_argument('--brand', default='')
+parser.add_argument('--accent', default='#3b82f6')
+parser.add_argument('--logo', default='')
+parser.add_argument('--shared-group', action='store_true')
+parser.add_argument('--with-sample-data', action='store_true')
+parser.add_argument('--upgrade', action='store_true', help='Back up and replace locally modified or unrecognized managed files')
+args = parser.parse_args()
+root = args.project_root.resolve(strict=True)
+bank = root / '.memory-bank'
+if not bank.is_dir() or bank.is_symlink():
+    parser.error('Initialize the incident-response .memory-bank first; use init-agent-rules --migrate for legacy projects')
+for legacy in ('memory-bank', 'incoming', 'artifacts', 'sensitive', 'dashboard.config.json', 'dashboard/certs', 'dashboard/venv', 'dashboard/cache'):
+    if (root / legacy).exists() or (root / legacy).is_symlink():
+        parser.error('Legacy workspace paths remain; run init-agent-rules --migrate before dashboard setup')
+if not (bank / 'incidentBrief.md').is_file() or not (bank / 'scopeAuthorization.md').is_file():
+    parser.error('An incident-response authority bank is required')
+if not re.fullmatch(r'#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?(?:[0-9a-fA-F]{2})?', args.accent):
+    parser.error('--accent must be a 3, 6 or 8 digit hex color')
+if args.logo and not (args.logo.startswith('/static/') or args.logo.startswith('data:image/')):
+    parser.error('--logo must be a /static/ path or data:image URL')
+
+def safe(path):
+    relative = path.relative_to(root)
+    cursor = root
+    for part in relative.parts:
+        cursor /= part
+        if cursor.is_symlink():
+            parser.error(f'Refusing symlinked deployment path: {relative}')
+
+config_path = bank / 'dashboard.config.json'
+safe(config_path)
+config = json.loads(config_path.read_text()) if config_path.exists() else {
+    'title': args.title, 'brand': args.brand, 'accent_color': args.accent,
+    'logo_url': args.logo, 'css_overrides': {}, 'shared_group_access': False,
+    'atomic_max_file_bytes': 104857600, 'atomic_max_records': 250000, 'atomic_max_fields': 250,
+}
 if not isinstance(config, dict):
-    raise SystemExit("dashboard.config.json must contain an object")
-config["shared_group_access"] = True
-directory = os.path.dirname(path) or "."
-fd, temporary = tempfile.mkstemp(prefix=".dashboard.config.", dir=directory, text=True)
-try:
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(config, handle, indent=2)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
-finally:
-    if os.path.exists(temporary):
-        os.unlink(temporary)
-PYUPDATE
-    echo "  ✓  Enabled shared_group_access in existing dashboard.config.json"
-  fi
-  echo "  ⚠  dashboard.config.json already exists — skipping"
-fi
+    parser.error('dashboard.config.json must contain an object')
+if args.shared_group:
+    config['shared_group_access'] = True
+shared = config.get('shared_group_access') is True
+dir_mode, file_mode = (0o770, 0o660) if shared else (0o700, 0o600)
+os.umask(0o007 if shared else 0o077)
+managed = {str(p.relative_to(source)): p for folder in ('dashboard', 'scripts') for p in (source / folder).rglob('*') if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc'}
+receipt = bank / 'runtime/dashboard/deployment.json'
+safe(receipt)
+previous = json.loads(receipt.read_text()) if receipt.exists() else {'files': {}}
+if not isinstance(previous, dict) or not isinstance(previous.get('files'), dict):
+    parser.error('Invalid dashboard deployment receipt')
+changes = []
+conflicts = []
+for relative, src in managed.items():
+    dest = root / relative
+    safe(dest)
+    if dest.exists() and not dest.is_file():
+        parser.error(f'Managed destination is not a file: {relative}')
+    digest = hashlib.sha256(src.read_bytes()).hexdigest()
+    current = hashlib.sha256(dest.read_bytes()).hexdigest() if dest.exists() else None
+    if current != digest:
+        changes.append((relative, src, dest))
+        if current is not None and current != previous['files'].get(relative):
+            conflicts.append(relative)
+if conflicts and not args.upgrade:
+    parser.error('Locally modified/unrecognized managed files: ' + ', '.join(conflicts) + '. Re-run --upgrade to back them up before replacement; unrelated files are never removed.')
+for relative in ('', 'incoming', 'artifacts', 'runtime', 'runtime/dashboard', 'backups'):
+    path = bank / relative
+    safe(path)
+    path.mkdir(parents=True, exist_ok=True, mode=dir_mode)
+    path.chmod(dir_mode)
+for folder in ('incoming', 'artifacts'):
+    for path in (bank / folder).rglob('*'):
+        safe(path)
+        path.chmod(dir_mode if path.is_dir() else file_mode)
 
-# Create reviewQueue.md if it doesn't exist
-RQ_FILE="$PROJECT_ROOT/memory-bank/reviewQueue.md"
-if [ -d "$PROJECT_ROOT/memory-bank" ] && [ ! -f "$RQ_FILE" ]; then
-  cat > "$RQ_FILE" << 'EOFRQ'
-# Review Queue
+def atomic(path, content, mode):
+    safe(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.deploy-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(name, mode)
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
 
-Tracks all pending judgment calls and downstream updates.
-Items are added by `intake.py` or manually. Checked off by the analyst/AI after completion.
-
-Status values: `PENDING` | `IN_PROGRESS` | `DONE`
-
----
-
-## Pending Review
-
-(No pending items)
-
----
-
-## Done
-
-EOFRQ
-  echo "  ✓  Created memory-bank/reviewQueue.md"
-fi
-
-# Exclude sensitive and generated runtime state from version control.
-GITIGNORE="$PROJECT_ROOT/.gitignore"
-touch "$GITIGNORE"
-for ignored in artifacts/ incoming/ dashboard/certs/ dashboard/venv/ dashboard/cache/; do
-  grep -qxF "$ignored" "$GITIGNORE" 2>/dev/null || echo "$ignored" >> "$GITIGNORE"
-done
-echo "  ✓  Ensured evidence and dashboard runtime state are in .gitignore"
-
-if [ ! -f "$PROJECT_ROOT/.agents/skills/memory-bank-ir-evidence-review/SKILL.md" ] && [ ! -f "$PROJECT_ROOT/.claude/skills/memory-bank-ir-evidence-review/SKILL.md" ]; then
-  echo "  ⚠  memory-bank-ir-evidence-review skill is not installed in this project."
-  echo "     Re-run init-agent-rules incident-response so agents can process the review queue."
-fi
-
-# Copy sample data
-if [ "$SAMPLE_DATA" = true ]; then
-  cp "$SKILL_DIR/sample-data/"*.json "$PROJECT_ROOT/incoming/"
-  if [ "$SHARED_GROUP" = true ]; then
-    chmod 0660 "$PROJECT_ROOT/incoming/"*.json
-  else
-    chmod 0600 "$PROJECT_ROOT/incoming/"*.json
-  fi
-  echo "  ✓  Copied sample data to incoming/ (run intake to process)"
-fi
-
-echo ""
-echo "  Setup complete. Start the dashboard:"
-echo ""
-echo "    cd $PROJECT_ROOT/dashboard"
-echo "    bash start.sh --port 8443"
-echo ""
-echo "  Or supply a specific password through the environment:"
-echo ""
-echo "    DASHBOARD_PASSWORD='use-a-secret-manager' bash start.sh --port 8443"
-echo ""
-if [ "$SAMPLE_DATA" = true ]; then
-  echo "  Sample data is in incoming/. Click 'Sync Check' → 'Run Intake'"
-  echo "  in the dashboard to process it, or run:"
-  echo ""
-  echo "    python scripts/intake.py"
-  echo ""
-fi
-echo "============================================================"
+backup = None
+if any(dest.exists() for _, _, dest in changes):
+    backup = Path(tempfile.mkdtemp(prefix='dashboard-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-', dir=bank / 'backups'))
+    backup.chmod(dir_mode)
+    for relative, _, dest in changes:
+        if dest.exists():
+            target = backup / relative
+            target.parent.mkdir(parents=True, exist_ok=True, mode=dir_mode)
+            shutil.copy2(dest, target)
+            target.chmod(file_mode)
+for relative, src, dest in changes:
+    atomic(dest, src.read_bytes(), 0o755 if dest.suffix == '.sh' else 0o644)
+atomic(config_path, (json.dumps(config, indent=2) + '\n').encode(), file_mode)
+record = {'schema': 1, 'files': {relative: hashlib.sha256(src.read_bytes()).hexdigest() for relative, src in managed.items()}}
+atomic(receipt, (json.dumps(record, indent=2) + '\n').encode(), file_mode)
+queue = bank / 'reviewQueue.md'
+if not queue.exists():
+    atomic(queue, b'# Review Queue\n\nStatus values: `PENDING` | `IN_PROGRESS` | `DONE`\n\n## Pending Review\n\n## Done\n', file_mode)
+ignore = root / '.gitignore'
+safe(ignore)
+text = ignore.read_text() if ignore.exists() else ''
+if '/.memory-bank/' not in text.splitlines():
+    atomic(ignore, (text.rstrip('\n') + '\n/.memory-bank/\n').encode(), 0o644)
+if args.with_sample_data:
+    for src in (source / 'sample-data').glob('*.json'):
+        dest = bank / 'incoming' / src.name
+        if not dest.exists():
+            atomic(dest, src.read_bytes(), file_mode)
+print(f'Installed/updated {len(changes)} managed files; configuration preserved at .memory-bank/dashboard.config.json')
+if backup:
+    print('Previous changed files preserved at ' + str(backup.relative_to(root)))
+print('Start: bash dashboard/start.sh --port 8443')
+print('Intake: select acquired evidence in the dashboard, or python3 -B scripts/intake.py PATH [PATH ...]')
+print('No selected paths means transaction recovery only; reference/operational drops remain pending.')
+PY

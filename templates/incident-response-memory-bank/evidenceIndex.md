@@ -1,7 +1,7 @@
 # Evidence Index
 
 Chain of custody. Every artifact is hashed and timestamped on intake, before it
-is copied into `artifacts/`. See the Artifact Intake procedure in `AGENTS.md`.
+is copied into `.memory-bank/artifacts/`. See the Artifact Intake procedure in `AGENTS.md`.
 
 Never record a digest that was not computed. Use `PENDING HASH` if hashing was
 not possible, and say so.
@@ -14,7 +14,7 @@ sha256sum <file>              # Linux
 date -u +%Y-%m-%dT%H:%M:%SZ   # ingest timestamp
 ```
 
-Stored as: `artifacts/<ingest-utc>__<first-12-of-hash>__<original-name>`
+Stored as: `.memory-bank/artifacts/<ingest-utc>__<first-12-of-hash>__<original-name>`
 
 ## Artifact Template
 

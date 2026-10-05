@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import uuid
 from contextlib import contextmanager, nullcontext
@@ -23,16 +24,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-INCOMING_DIR = PROJECT_ROOT / "incoming"
-ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
-MEMORY_BANK = PROJECT_ROOT / "memory-bank"
+MEMORY_BANK = PROJECT_ROOT / ".memory-bank"
+INCOMING_DIR = MEMORY_BANK / "incoming"
+ARTIFACTS_DIR = MEMORY_BANK / "artifacts"
 EVIDENCE_INDEX = MEMORY_BANK / "evidenceIndex.md"
 REVIEW_QUEUE = MEMORY_BANK / "reviewQueue.md"
 PROGRESS = MEMORY_BANK / "progress.md"
-CONFIG_FILE = PROJECT_ROOT / "dashboard.config.json"
+CONFIG_FILE = MEMORY_BANK / "dashboard.config.json"
 LOCK_FILE = ARTIFACTS_DIR / ".intake.lock"
 JOURNAL_FILE = ARTIFACTS_DIR / ".intake-journal.json"
 CUSTODY_MANIFEST = ARTIFACTS_DIR / ".custody-manifest.jsonl"
+
+sys.dont_write_bytecode = True
+from ir_common import canonical_path
 
 
 def _reject_nonfinite_json(value: str):
@@ -42,10 +46,10 @@ def _reject_nonfinite_json(value: str):
 def load_security_config() -> dict:
     try:
         raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"), parse_constant=_reject_nonfinite_json)
-    except (OSError, ValueError):
+    except FileNotFoundError:
         raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
+    if not isinstance(raw, dict) or not isinstance(raw.get("shared_group_access", False), bool):
+        raise ValueError("dashboard.config.json must contain an object with a boolean shared_group_access")
     return {"shared_group_access": raw.get("shared_group_access", False) is True}
 
 
@@ -55,8 +59,10 @@ def _modes() -> tuple[int, int]:
 
 
 def ensure_secure_directories() -> None:
+    if (PROJECT_ROOT / "memory-bank").exists():
+        raise RuntimeError("Legacy bank remains; run the installer migration before intake")
     dir_mode, _ = _modes()
-    for directory in (INCOMING_DIR, ARTIFACTS_DIR):
+    for directory in (MEMORY_BANK, INCOMING_DIR, ARTIFACTS_DIR):
         if directory.is_symlink():
             raise RuntimeError(f"Sensitive directory must not be a symlink: {directory}")
         directory.mkdir(parents=True, exist_ok=True, mode=dir_mode)
@@ -355,7 +361,7 @@ def _validate_journal(journal: dict) -> None:
             raise RuntimeError("Invalid evidence-index entry in intake recovery journal")
         if not re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256", ""))):
             raise RuntimeError("Invalid artifact digest in intake recovery journal")
-        pending = Path(str(item.get("pending_path", "")))
+        pending = canonical_path(PROJECT_ROOT, str(item.get("pending_path", "")))
         if (
             not pending.is_absolute()
             or pending.parent.absolute() != artifacts_root
@@ -363,8 +369,8 @@ def _validate_journal(journal: dict) -> None:
             or pending.is_symlink()
         ):
             raise RuntimeError("Unsafe pending path in intake recovery journal")
-        stored = Path(str(item.get("stored_path", "")))
-        if stored.parent != Path("artifacts") or stored.name in ("", ".", ".."):
+        stored = canonical_path(PROJECT_ROOT, str(item.get("stored_path", "")))
+        if stored.parent != ARTIFACTS_DIR or stored.name in ("", ".", ".."):
             raise RuntimeError("Unsafe stored path in intake recovery journal")
         if not isinstance(item.get("remove_source"), bool):
             raise RuntimeError("Invalid source-removal flag in intake recovery journal")
@@ -374,7 +380,7 @@ def _validate_journal(journal: dict) -> None:
                 isinstance(value, int) for value in identity.values()
             ):
                 raise RuntimeError("Invalid source identity in intake recovery journal")
-            source = Path(str(item.get("source_path", "")))
+            source = canonical_path(PROJECT_ROOT, str(item.get("source_path", "")))
             try:
                 if source.parent.resolve(strict=True) != incoming_root or source.is_symlink():
                     raise RuntimeError("unsafe source")
@@ -386,8 +392,8 @@ def _commit_journal(journal: dict, *, prepared_verified: bool = False) -> None:
     _validate_journal(journal)
     _, file_mode = _modes()
     for item in journal["items"]:
-        pending = Path(item["pending_path"])
-        final = PROJECT_ROOT / item["stored_path"]
+        pending = canonical_path(PROJECT_ROOT, item["pending_path"])
+        final = canonical_path(PROJECT_ROOT, item["stored_path"])
         if final.is_symlink():
             raise RuntimeError(f"Refusing symlinked artifact destination during recovery: {final}")
         if pending.exists() and final.exists():
@@ -425,7 +431,7 @@ def _commit_journal(journal: dict, *, prepared_verified: bool = False) -> None:
     _atomic_write_text(PROGRESS, progress)
 
     for item in journal["items"]:
-        source = Path(item["source_path"])
+        source = canonical_path(PROJECT_ROOT, item["source_path"]) if item["remove_source"] else Path(item["source_path"])
         if item["remove_source"] and source.exists():
             try:
                 unchanged = _stat_identity(source) == item["source_identity"]
@@ -462,6 +468,7 @@ def ingest_files(
     provided_by: str = "UNVERIFIED — provider not supplied to intake",
     source_system: str = "UNVERIFIED — system of origin not supplied to intake",
     acquisition_method: str = "File transfer into incoming/",
+    retain_source: bool = False,
 ) -> list[dict]:
     lock_context = nullcontext() if dry_run else intake_lock()
     with lock_context:
@@ -479,6 +486,8 @@ def ingest_files(
 
         for candidate in filepaths:
             try:
+                if candidate.is_symlink():
+                    raise OSError("symlink sources are not evidence selections")
                 source = candidate.resolve(strict=True)
                 if not source.is_file():
                     raise OSError("not a regular file")
@@ -519,10 +528,10 @@ def ingest_files(
                 "stored_path": str(stored_path.relative_to(PROJECT_ROOT)),
                 "size": source_identity["size"],
                 "source_identity": source_identity,
-                "remove_source": source.parent == INCOMING_DIR.resolve(),
+                "remove_source": not retain_source and source.parent == INCOMING_DIR.resolve(),
             }
             if dry_run:
-                results.append(_public_result(item, dry_run=True, verified=True))
+                results.append(_public_result(item, dry_run=True, verified=False, source_hashed=True))
                 continue
             if queue_id is None:
                 queue_id = next_queue_id(queue_content)
@@ -583,52 +592,45 @@ def ingest_files(
         return results
 
 
-def ingest_file(filepath: Path, dry_run: bool = False, **metadata) -> dict:
-    """Compatibility wrapper; a single-file call still commits queue/progress."""
-    return ingest_files([filepath], dry_run=dry_run, **metadata)[0]
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Atomically ingest incident evidence")
-    parser.add_argument("files", nargs="*", type=Path)
+    parser = argparse.ArgumentParser(description="Acquire explicitly selected incident evidence; no files means recovery only")
+    parser.add_argument("files", nargs="*", type=Path, help="Explicitly classified acquired evidence, not operational/reference drops")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--retain-source", action="store_true", help="Preserve incoming sources after verified acquisition")
+    parser.add_argument("--json", action="store_true", help="Emit committed receipts as one JSON object")
     parser.add_argument("--provided-by", default="UNVERIFIED — provider not supplied to intake")
     parser.add_argument("--source-system", default="UNVERIFIED — system of origin not supplied to intake")
-    parser.add_argument("--acquisition-method", default="File transfer into incoming/")
+    parser.add_argument("--acquisition-method", default="Explicit selection as acquired evidence")
     args = parser.parse_args()
-
-    if args.files:
-        files = args.files
-    elif INCOMING_DIR.exists():
-        files = sorted(path for path in INCOMING_DIR.iterdir() if path.is_file() and not path.name.startswith("."))
+    try:
+        results = ingest_files(args.files, dry_run=args.dry_run, retain_source=args.retain_source,
+                               provided_by=args.provided_by, source_system=args.source_system,
+                               acquisition_method=args.acquisition_method)
+    except (OSError, RuntimeError, ValueError) as exc:
+        if args.json:
+            print(json.dumps({"results": [], "ingested": 0, "failed": 1, "error": str(exc)}))
+        else:
+            print(f"Intake failed: {exc}")
+        raise SystemExit(1)
+    failed = sum("error" in item for item in results)
+    ok = len(results) - failed
+    if args.json:
+        print(json.dumps({"results": results, "ingested": 0 if args.dry_run else ok, "failed": failed}))
     else:
-        files = []
-    if not files:
-        print("No files to process.")
-        return
-
-    results = ingest_files(
-        files,
-        dry_run=args.dry_run,
-        provided_by=args.provided_by,
-        source_system=args.source_system,
-        acquisition_method=args.acquisition_method,
-    )
-    ok = 0
-    for result in results:
-        if "error" in result:
-            print(f"✗ {result.get('original_name', 'file')}: {result['error']}")
-            continue
-        ok += 1
-        status = "WOULD INGEST" if args.dry_run else "✓ VERIFIED"
-        print(f"{status}: {result['artifact_id']} — {result['original_name']}")
-        print(f"  SHA-256: {result['sha256']}")
-        print(f"  Ingested: {result['ingest_utc']}")
-        print(f"  Stored: {result['stored_path']}")
-    action = "would ingest" if args.dry_run else "ingested"
-    print(f"Summary: {ok} {action}, {len(results) - ok} failed")
-    if ok and not args.dry_run:
-        print("Analysis remains pending in memory-bank/reviewQueue.md.")
+        for item in results:
+            if "error" in item:
+                print(f"Failed: {item['error']}")
+            else:
+                label = "PREVIEW — copy not verified" if args.dry_run else "VERIFIED"
+                print(f"{label}: {item['artifact_id']} — {item['original_name']}")
+                print(f"  SHA-256: {item['sha256']}\n  Stored: {item['stored_path']}")
+        print(f"Summary: {ok} {'previewed' if args.dry_run else 'ingested'}, {failed} failed")
+        if not args.files:
+            print("Recovery checked; incoming drops require explicit evidence selection.")
+        if ok and not args.dry_run:
+            print("Analysis remains pending in .memory-bank/reviewQueue.md.")
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

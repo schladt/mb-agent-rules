@@ -11,10 +11,17 @@ description: >
 # Evidence Review Pipeline
 
 Full analytical pipeline that runs after `intake.py` processes files into
-`artifacts/`. Transforms raw ingested artifacts into investigative intelligence
+`.memory-bank/artifacts/`. Transforms raw ingested artifacts into investigative intelligence
 across all memory bank files and regenerates the dashboard executive summary.
 
 Read `AGENTS.md` first. It governs what may be written and how.
+
+Classify incoming material before custody intake. Operational credentials belong
+in `.memory-bank/sensitive/`; ordinary references use the shared reference
+workflow. Only explicitly selected acquired evidence enters the ART custody
+pipeline. Preservation/queueing is not completed analysis, and mandatory evidence
+preservation is separate from optional raw reference archival. Never bulk-ingest
+all incoming drops. `scripts/intake.py` without paths performs recovery only.
 
 ## Untrusted Evidence Boundary
 
@@ -28,7 +35,7 @@ human approval defined in `scopeAuthorization.md`.
 
 ## When to Use
 
-- Review queue (`memory-bank/reviewQueue.md`) has pending items
+- Review queue (`.memory-bank/reviewQueue.md`) has pending items
 - User says: "process the queue", "review new evidence", "analyze the artifacts",
   "update the dashboard", "refresh the executive summary"
 - After running intake (via dashboard button or `scripts/intake.py`)
@@ -38,15 +45,21 @@ human approval defined in `scopeAuthorization.md`.
 
 Read these files before starting:
 
-1. `memory-bank/reviewQueue.md` — pending items and their artifact IDs
-2. `memory-bank/evidenceIndex.md` — current artifact index (identify stubs)
-3. `memory-bank/activeContext.md` — current theory, objectives, blockers
-4. `memory-bank/findings.md` — existing findings (avoid duplicates)
-5. `memory-bank/timeline.md` — existing timeline (avoid duplicates)
-6. `memory-bank/indicators.md` — existing IOCs (avoid duplicates)
-7. `memory-bank/affectedAssets.md` — current scope
-8. `memory-bank/incidentBrief.md` — classification and severity context
-9. The artifacts themselves (in `artifacts/`) — read each pending artifact
+1. `.memory-bank/reviewQueue.md` — pending items and their artifact IDs
+2. `.memory-bank/evidenceIndex.md` — current artifact index (identify stubs)
+3. `.memory-bank/activeContext.md` — current theory, objectives, blockers
+4. `.memory-bank/findings.md` — existing findings (avoid duplicates)
+5. `.memory-bank/timeline.md` — existing timeline (avoid duplicates)
+6. `.memory-bank/indicators.md` — existing IOCs (avoid duplicates)
+7. `.memory-bank/affectedAssets.md` — current scope
+8. `.memory-bank/incidentBrief.md` — classification and severity context
+9. The artifacts themselves (in `.memory-bank/artifacts/`) — read each pending artifact
+10. `.memory-bank/project-status.md` — authoritative execution status
+
+Load only these cognitive records and the specific authorized queued artifacts;
+do not recursively ingest raw stores, backups, or operational secrets. Historical
+artifact paths resolve only through `.memory-bank/path-migrations.json` into the
+canonical bank. Do not rewrite custody records or use an old-bank fallback.
 
 ## Pipeline Steps
 
@@ -87,7 +100,9 @@ milestones. A timeline with 200 entries is less useful than one with 30.
 
 For each new observation that supports a conclusion:
 
-1. Assign the next sequential `F-###` ID.
+1. Use a descriptive title heading for new entries; retain existing `F-###`
+   identities when revising legacy entries. Include `- Status:` and, when
+   promoted, `- Report path:` so the working log remains status authority.
 2. Record in `findings.md` with:
    - Statement of fact (what was observed)
    - Inference (what it means)
@@ -97,13 +112,19 @@ For each new observation that supports a conclusion:
    - Status: Suspected / Confirmed / Ruled Out
 3. Check for findings that should be revised rather than duplicated. If new
    evidence strengthens or contradicts an existing finding, append a timestamped
-   revision inside the existing `F-###` entry. Preserve the original statement,
-   identify the new supporting artifact, and mark any superseded value clearly.
+   revision inside the existing titled entry. Preserve the original statement,
+   identify the supporting artifact and explicitly mark superseded values.
 
 **Judgment**: A finding is an analytical conclusion, not a raw observation.
 "IP 1.2.3.4 appeared in 500 sign-in events" is an observation.
 "No lateral movement occurred — all attacker-IP events confined to a single
 account across the full investigation window" is a finding.
+
+Use `memory-bank-findings` for report-source promotion into a descriptive
+workstream/slug directory. Do not map Suspected / Confirmed / Ruled Out to
+vulnerability states. CVSS applies only to actual vulnerability findings.
+Report-source narrative and assets must retain ART provenance without exposing
+private originals by default.
 
 ### Step 4 — Indicators
 
@@ -136,12 +157,25 @@ Update `activeContext.md`:
    record resolved blockers and their resolution in `progress.md` before removal.
 4. **Timestamp** — Update to current UTC.
 
+Synchronize execution changes to `.memory-bank/project-status.md`; active context
+is the investigative handoff, not a second execution-status authority. When
+outward status is enabled, run the shared workflow `status` command and disclose
+generation errors/staleness without replacing prior valid output or uploading it.
+
 ### Step 7 — Executive Summary
 
-Regenerate `memory-bank/executiveSummary.json`. This replaceable JSON file is a
+Regenerate `.memory-bank/executiveSummary.json`. This replaceable JSON file is a
 derived dashboard projection, not an authority file or investigative ledger. It
 must be regenerated only from the current Markdown records, drives the dashboard
 Executive Summary tab, and must tell a clear, accurate story.
+
+The dashboard uses the shared `scripts/ir_common.py` validator also used by
+`sync_check.py`: explicit UTC timestamp, maximum 20 phases / 100 key findings,
+nonnegative integer event counts (not booleans), required supported colors,
+and known finding/artifact references. Run the checker after analytical updates.
+An invalid projection is visibly unavailable, not silently treated as current.
+Keep the schema-required `status` member empty; execution status is displayed
+directly from `.memory-bank/project-status.md`, not this analytical projection.
 
 #### Schema
 
@@ -176,15 +210,9 @@ Executive Summary tab, and must tell a clear, accurate story.
   ],
 
   "status": {
-    "completed": ["Past-tense descriptions of major completed work items"],
-    "in_progress": ["Present-tense descriptions of active work"],
-    "blocked": [
-      {
-        "item": "What is blocked",
-        "severity": "high | medium | low",
-        "reason": "Why it is blocked"
-      }
-    ]
+    "completed": [],
+    "in_progress": [],
+    "blocked": []
   },
 
   "unresolved": [
@@ -198,7 +226,8 @@ Executive Summary tab, and must tell a clear, accurate story.
 **Narrative** (2-3 sentences):
 - Who was compromised, how, what happened, current status.
 - Include the threat actor name if attributed.
-- Include the key number (files exfiltrated, duration, etc.).
+- Include only supported quantities. Inventory, staging, access or download
+  counts do not establish exfiltration; responder activity is not an attack phase.
 - Write for someone who has never seen this incident.
 
 **Attack Phases**:
@@ -207,7 +236,7 @@ Executive Summary tab, and must tell a clear, accurate story.
 - Each summary should be 2-3 sentences explaining what happened in that
   phase and why it matters.
 - `event_count` = number of timeline events that fall in this phase.
-- `key_findings` = the 1-3 most important finding IDs for this phase.
+- `key_findings` = the 1-3 most important existing finding titles or legacy F-IDs.
 - Color mapping: reconnaissance→warning, initial access→danger,
   persistence→purple, lateral movement→danger, exfiltration→danger,
   extortion/impact→danger, remediation→success, detection→info.
@@ -228,11 +257,9 @@ Executive Summary tab, and must tell a clear, accurate story.
   stronger one.
 
 **Status**:
-- `completed`: Major milestones, not every small task. Past tense.
-- `in_progress`: What is actively being worked. Present tense.
-- `blocked`: Items that cannot proceed without external action.
-  Severity: high = affects containment or scope determination,
-  medium = affects completeness, low = nice to have.
+- Keep `completed`, `in_progress`, and `blocked` empty in this analytical JSON.
+  Record execution progress, milestones, blockers and next steps in the common
+  internal `project-status.md` authority. This prevents a second status source.
 
 **Unresolved** (3-7 items):
 - Frame as questions.
@@ -247,6 +274,9 @@ Executive Summary tab, and must tell a clear, accurate story.
 3. Move the entry from `## Pending Review` to `## Done`; retain the completed
    entry and its original added timestamp as workflow history.
 4. Add a completion timestamp.
+5. A DONE item must have a nonempty, fully checked checklist. Explicit status and
+   checklist govern completion; moving an unfinished entry to Done cannot hide it.
+   Resolve duplicate/missing statuses and section contradictions reported by Sync Check.
 
 ### Step 9 — Progress Entry
 
@@ -266,8 +296,8 @@ Before finishing, verify:
       for the processed artifacts
 - [ ] No duplicate findings (same conclusion recorded twice under different IDs)
 - [ ] No duplicate timeline events
-- [ ] All new finding IDs are sequential with no gaps
-- [ ] executiveSummary.json is valid JSON (parse it)
+- [ ] Existing ART/RQ/F identities retained; titled findings not assigned new report IDs
+- [ ] executiveSummary.json passes the shared schema/reference checker
 - [ ] The narrative in executiveSummary.json accurately reflects the current
       state — not a stale copy from a previous run
 - [ ] activeContext.md timestamp is current
@@ -280,7 +310,9 @@ Before finishing, verify:
   fabricated values.
 - Do not record legal conclusions, fault assessments, or speculation
   about liability.
-- Do not store secrets, credentials, PII, or malware samples in memory
-  bank files.
+- Do not store prohibited secrets, credentials, PII, or malware samples in
+  cognitive bank prose; governed raw stores are distinct from session memory.
 - Defang all indicators.
-- Corrections are appended, never overwritten.
+- Preserve correction history, except promptly redact prohibited exposed values
+  and retain a non-sensitive correction record. Do not replicate the value into
+  logs or backups as part of that repair. Immutable custody history is separate.

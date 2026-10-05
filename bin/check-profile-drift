@@ -1,79 +1,43 @@
-#!/usr/bin/env bash
-# Verify that each profile's AGENTS.md references exactly the files present in
-# the corresponding template directory. Exit 0 if all profiles agree, 1 on drift.
-set -euo pipefail
+#!/usr/bin/env python3
+"""Compare explicit cognitive file references with each profile's templates."""
+import os
+from pathlib import Path
+import re
+import sys
 
-DEFAULT_AGENT_RULES_ROOT="$HOME/projects/mb-agent-rules"
-AGENT_RULES_ROOT="${AGENT_RULES_ROOT:-$DEFAULT_AGENT_RULES_ROOT}"
 
-if [ ! -d "$AGENT_RULES_ROOT" ]; then
-  printf 'error: AGENT_RULES_ROOT not found: %s\n' "$AGENT_RULES_ROOT" >&2
-  exit 2
-fi
+def main():
+    root = Path(os.environ.get("AGENT_RULES_ROOT", Path(__file__).resolve().parent.parent))
+    if not root.is_dir():
+        print(f"error: AGENT_RULES_ROOT not found: {root}", file=sys.stderr)
+        return 2
+    status = 0
+    for profile in ("pentest", "academic-research", "general-project", "incident-response"):
+        instructions = root / "instructions" / f"AGENTS.{profile}.md"
+        templates = root / "templates" / f"{profile}-memory-bank"
+        if not instructions.is_file() or not templates.is_dir():
+            print(f"[{profile}] missing instructions or templates", file=sys.stderr)
+            status = 1
+            continue
+        text = instructions.read_text(encoding="utf-8")
+        referenced = set(re.findall(r"(?<![\w/])\.memory-bank/([A-Za-z][A-Za-z0-9_-]*\.md)", text))
+        supplied = {p.name for p in templates.glob("*.md") if p.is_file()}
+        if referenced == supplied and supplied:
+            print(f"[{profile}] OK ({len(supplied)} cognitive files agreed)")
+            continue
+        status = 1
+        print(f"[{profile}] DRIFT detected")
+        for label, difference in (("in instructions but not templates", referenced - supplied), ("in templates but not instructions", supplied - referenced)):
+            if difference:
+                print(f"  {label}: {', '.join(sorted(difference))}")
+        if not supplied:
+            print("  empty cognitive template set")
+    return status
 
-profiles=(pentest academic-research general-project incident-response)
-exit_status=0
 
-extract_instruction_files() {
-  grep -oE 'memory-bank/[A-Za-z][A-Za-z0-9_-]*\.md' "$1" 2>/dev/null \
-    | sort -u
-}
-
-extract_template_files() {
-  local template_dir="$1"
-  [ -d "$template_dir" ] || return
-  find "$template_dir" -maxdepth 1 -name '*.md' -type f -exec basename {} \; \
-    | sed 's/^/memory-bank\//' | sort -u
-}
-
-compare_profile() {
-  local profile="$1"
-  local instructions_file="$AGENT_RULES_ROOT/instructions/AGENTS.${profile}.md"
-  local template_dir="$AGENT_RULES_ROOT/templates/${profile}-memory-bank"
-
-  if [ ! -f "$instructions_file" ]; then
-    printf '[%s] missing: %s\n' "$profile" "$instructions_file" >&2
-    exit_status=1
-    return
-  fi
-
-  if [ ! -d "$template_dir" ]; then
-    printf '[%s] missing: %s\n' "$profile" "$template_dir" >&2
-    exit_status=1
-    return
-  fi
-
-  local instruction_set template_set
-  instruction_set=$(extract_instruction_files "$instructions_file")
-  template_set=$(extract_template_files "$template_dir")
-
-  if [ "$instruction_set" = "$template_set" ]; then
-    local count
-    count=$(printf '%s\n' "$instruction_set" | grep -c . || true)
-    printf '[%s] OK (%d files agreed between instructions and templates)\n' \
-      "$profile" "$count"
-    return
-  fi
-
-  printf '[%s] DRIFT detected\n' "$profile"
-  exit_status=1
-
-  local only_in_instructions only_in_templates
-  only_in_instructions=$(comm -23 <(echo "$instruction_set") <(echo "$template_set"))
-  only_in_templates=$(comm -13 <(echo "$instruction_set") <(echo "$template_set"))
-
-  if [ -n "$only_in_instructions" ]; then
-    printf '  in AGENTS.md but not in templates/:\n'
-    printf '    %s\n' $only_in_instructions
-  fi
-  if [ -n "$only_in_templates" ]; then
-    printf '  in templates/ but not in AGENTS.md:\n'
-    printf '    %s\n' $only_in_templates
-  fi
-}
-
-for p in "${profiles[@]}"; do
-  compare_profile "$p"
-done
-
-exit "$exit_status"
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, UnicodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
